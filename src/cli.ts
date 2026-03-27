@@ -75,7 +75,7 @@ const LOG_DIR = path.join(os.homedir(), '.plaud-sync', 'logs')
 
 function generatePlist(intervalMinutes: number, outputFolder: string): string {
   const binPath = process.argv[1]
-  const tsxPath = process.argv[0]
+  const bunPath = process.execPath
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -85,7 +85,7 @@ function generatePlist(intervalMinutes: number, outputFolder: string): string {
   <string>${PLIST_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${tsxPath}</string>
+    <string>${bunPath}</string>
     <string>${binPath}</string>
     <string>sync</string>
     <string>${outputFolder}</string>

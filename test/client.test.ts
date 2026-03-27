@@ -1,16 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, mock, spyOn } from 'bun:test'
 import { PlaudClient } from '../src/client.js'
 import type { PlaudAuth } from '../src/auth.js'
 
 function makeAuth(): PlaudAuth {
   return {
-    getToken: vi.fn().mockResolvedValue('test-token'),
+    getToken: mock(() => Promise.resolve('test-token')),
   } as unknown as PlaudAuth
 }
 
 describe('PlaudClient', () => {
   beforeEach(() => {
-    vi.restoreAllMocks()
+    mock.restore()
   })
 
   describe('listRecordings', () => {
@@ -18,7 +18,7 @@ describe('PlaudClient', () => {
       const auth = makeAuth()
       const client = new PlaudClient(auth, 'us')
 
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
         new Response(JSON.stringify({
           data_file_list: [
             { id: '1', filename: 'meeting', is_trash: false },
@@ -26,7 +26,7 @@ describe('PlaudClient', () => {
             { id: '3', filename: 'notes', is_trash: false },
           ],
         })),
-      )
+      ))
 
       const recordings = await client.listRecordings()
       expect(recordings).toHaveLength(2)
@@ -38,9 +38,9 @@ describe('PlaudClient', () => {
       const auth = makeAuth()
       const client = new PlaudClient(auth, 'us')
 
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
         new Response(JSON.stringify({ data_file_list: [] })),
-      )
+      ))
 
       await client.listRecordings()
 
@@ -58,18 +58,18 @@ describe('PlaudClient', () => {
       const auth = makeAuth()
       const client = new PlaudClient(auth, 'us')
 
-      const fetchSpy = vi.spyOn(globalThis, 'fetch')
-        .mockResolvedValueOnce(
+      const fetchSpy = spyOn(globalThis, 'fetch')
+        .mockImplementationOnce(() => Promise.resolve(
           new Response(JSON.stringify({
             status: -302,
             data: { domains: { api: 'api-euc1.plaud.ai' } },
           })),
-        )
-        .mockResolvedValueOnce(
+        ))
+        .mockImplementationOnce(() => Promise.resolve(
           new Response(JSON.stringify({
             data_file_list: [{ id: '1', filename: 'test', is_trash: false }],
           })),
-        )
+        ))
 
       const recordings = await client.listRecordings()
       expect(recordings).toHaveLength(1)
@@ -83,9 +83,9 @@ describe('PlaudClient', () => {
       const auth = makeAuth()
       const client = new PlaudClient(auth, 'us')
 
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
         new Response(JSON.stringify({ url: 'https://cdn.example.com/file.mp3' })),
-      )
+      ))
 
       const url = await client.getMp3Url('rec-123')
       expect(url).toBe('https://cdn.example.com/file.mp3')
@@ -95,7 +95,7 @@ describe('PlaudClient', () => {
       const auth = makeAuth()
       const client = new PlaudClient(auth, 'us')
 
-      vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Network error'))
+      spyOn(globalThis, 'fetch').mockImplementation(() => Promise.reject(new Error('Network error')))
 
       const url = await client.getMp3Url('rec-123')
       expect(url).toBeNull()
@@ -108,9 +108,9 @@ describe('PlaudClient', () => {
       const client = new PlaudClient(auth, 'us')
 
       const audioData = new ArrayBuffer(16)
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
         new Response(audioData, { status: 200 }),
-      )
+      ))
 
       const result = await client.downloadAudio('rec-123')
       expect(result.byteLength).toBe(16)
@@ -120,9 +120,9 @@ describe('PlaudClient', () => {
       const auth = makeAuth()
       const client = new PlaudClient(auth, 'us')
 
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
         new Response(null, { status: 404, statusText: 'Not Found' }),
-      )
+      ))
 
       await expect(client.downloadAudio('rec-123')).rejects.toThrow('Download failed: 404')
     })

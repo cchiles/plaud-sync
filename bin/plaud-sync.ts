@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
 import { createProgram } from '../src/cli.js'
 
 createProgram().parse()

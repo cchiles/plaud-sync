@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
@@ -52,6 +52,7 @@ describe('syncRecordings', () => {
   })
 
   afterEach(() => {
+    mock.restore()
     fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
@@ -59,19 +60,19 @@ describe('syncRecordings', () => {
     const recordings = [makeRecording()]
 
     const client: PlaudClient = {
-      listRecordings: vi.fn().mockResolvedValue(recordings),
-      getMp3Url: vi.fn().mockResolvedValue('https://cdn.example.com/file.mp3'),
-      downloadAudio: vi.fn(),
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock(() => Promise.resolve('https://cdn.example.com/file.mp3')),
+      downloadAudio: mock(() => undefined),
     } as unknown as PlaudClient
 
     const transcriber: Transcriber = {
-      transcribe: vi.fn().mockResolvedValue(undefined),
+      transcribe: mock(() => Promise.resolve(undefined)),
     } as unknown as Transcriber
 
     // Mock fetch for MP3 download
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
       new Response(new ArrayBuffer(16), { status: 200 }),
-    )
+    ))
 
     await syncRecordings(client, transcriber, tmpDir)
 
@@ -87,13 +88,13 @@ describe('syncRecordings', () => {
     const recordings = [makeRecording()]
 
     const client: PlaudClient = {
-      listRecordings: vi.fn().mockResolvedValue(recordings),
-      getMp3Url: vi.fn(),
-      downloadAudio: vi.fn(),
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock(() => undefined),
+      downloadAudio: mock(() => undefined),
     } as unknown as PlaudClient
 
     const transcriber: Transcriber = {
-      transcribe: vi.fn(),
+      transcribe: mock(() => undefined),
     } as unknown as Transcriber
 
     // Pre-create the audio file
@@ -116,13 +117,13 @@ describe('syncRecordings', () => {
     const recordings = [makeRecording()]
 
     const client: PlaudClient = {
-      listRecordings: vi.fn().mockResolvedValue(recordings),
-      getMp3Url: vi.fn(),
-      downloadAudio: vi.fn(),
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock(() => undefined),
+      downloadAudio: mock(() => undefined),
     } as unknown as PlaudClient
 
     const transcriber: Transcriber = {
-      transcribe: vi.fn().mockResolvedValue(undefined),
+      transcribe: mock(() => Promise.resolve(undefined)),
     } as unknown as Transcriber
 
     // Pre-create only the audio file
@@ -140,13 +141,13 @@ describe('syncRecordings', () => {
     const recordings = [makeRecording()]
 
     const client: PlaudClient = {
-      listRecordings: vi.fn().mockResolvedValue(recordings),
-      getMp3Url: vi.fn().mockResolvedValue(null),
-      downloadAudio: vi.fn().mockResolvedValue(new ArrayBuffer(16)),
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock(() => Promise.resolve(null)),
+      downloadAudio: mock(() => Promise.resolve(new ArrayBuffer(16))),
     } as unknown as PlaudClient
 
     const transcriber: Transcriber = {
-      transcribe: vi.fn().mockResolvedValue(undefined),
+      transcribe: mock(() => Promise.resolve(undefined)),
     } as unknown as Transcriber
 
     await syncRecordings(client, transcriber, tmpDir)
@@ -164,20 +165,20 @@ describe('syncRecordings', () => {
     ]
 
     const client: PlaudClient = {
-      listRecordings: vi.fn().mockResolvedValue(recordings),
-      getMp3Url: vi.fn()
-        .mockRejectedValueOnce(new Error('Network error'))
-        .mockResolvedValueOnce('https://cdn.example.com/second.mp3'),
-      downloadAudio: vi.fn(),
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock()
+        .mockImplementationOnce(() => Promise.reject(new Error('Network error')))
+        .mockImplementationOnce(() => Promise.resolve('https://cdn.example.com/second.mp3')),
+      downloadAudio: mock(() => undefined),
     } as unknown as PlaudClient
 
     const transcriber: Transcriber = {
-      transcribe: vi.fn().mockResolvedValue(undefined),
+      transcribe: mock(() => Promise.resolve(undefined)),
     } as unknown as Transcriber
 
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
       new Response(new ArrayBuffer(16), { status: 200 }),
-    )
+    ))
 
     await syncRecordings(client, transcriber, tmpDir)
 
@@ -194,21 +195,21 @@ describe('syncRecordings', () => {
     const processOrder: string[] = []
 
     const client: PlaudClient = {
-      listRecordings: vi.fn().mockResolvedValue(recordings),
-      getMp3Url: vi.fn().mockImplementation((id: string) => {
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock((id: string) => {
         processOrder.push(id)
         return Promise.resolve('https://cdn.example.com/file.mp3')
       }),
-      downloadAudio: vi.fn(),
+      downloadAudio: mock(() => undefined),
     } as unknown as PlaudClient
 
     const transcriber: Transcriber = {
-      transcribe: vi.fn().mockResolvedValue(undefined),
+      transcribe: mock(() => Promise.resolve(undefined)),
     } as unknown as Transcriber
 
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
       new Response(new ArrayBuffer(16), { status: 200 }),
-    )
+    ))
 
     await syncRecordings(client, transcriber, tmpDir)
 

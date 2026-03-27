@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, mock, spyOn } from 'bun:test'
 import { PlaudAuth } from '../src/auth.js'
 import type { PlaudSyncConfig } from '../src/config.js'
 import type { TokenData, Credentials } from '../src/types.js'
@@ -8,16 +8,16 @@ function makeConfig(overrides: {
   token?: TokenData
 } = {}): PlaudSyncConfig {
   return {
-    getCredentials: vi.fn(() => overrides.credentials),
-    getToken: vi.fn(() => overrides.token),
-    saveToken: vi.fn(),
-    saveCredentials: vi.fn(),
+    getCredentials: mock(() => overrides.credentials),
+    getToken: mock(() => overrides.token),
+    saveToken: mock(() => undefined),
+    saveCredentials: mock(() => undefined),
   } as unknown as PlaudSyncConfig
 }
 
 describe('PlaudAuth', () => {
   beforeEach(() => {
-    vi.restoreAllMocks()
+    mock.restore()
   })
 
   it('returns cached token when not expiring soon', async () => {
@@ -51,13 +51,13 @@ describe('PlaudAuth', () => {
       'signature',
     ].join('.')
 
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
       new Response(JSON.stringify({
         status: 0,
         access_token: fakeJwt,
         token_type: 'Bearer',
       })),
-    )
+    ))
 
     const auth = new PlaudAuth(config)
     const result = await auth.getToken()
@@ -76,12 +76,12 @@ describe('PlaudAuth', () => {
     const creds: Credentials = { email: 'test@example.com', password: 'wrong', region: 'us' }
     const config = makeConfig({ credentials: creds })
 
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
       new Response(JSON.stringify({
         status: -1,
         msg: 'Invalid password',
       })),
-    )
+    ))
 
     const auth = new PlaudAuth(config)
     await expect(auth.getToken()).rejects.toThrow('Invalid password')
@@ -97,13 +97,13 @@ describe('PlaudAuth', () => {
       'signature',
     ].join('.')
 
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
       new Response(JSON.stringify({
         status: 0,
         access_token: fakeJwt,
         token_type: 'Bearer',
       })),
-    )
+    ))
 
     const auth = new PlaudAuth(config)
     await auth.getToken()
@@ -124,13 +124,13 @@ describe('PlaudAuth', () => {
       'signature',
     ].join('.')
 
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
       new Response(JSON.stringify({
         status: 0,
         access_token: fakeJwt,
         token_type: 'Bearer',
       })),
-    )
+    ))
 
     const auth = new PlaudAuth(config)
     await auth.getToken()

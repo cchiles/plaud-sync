@@ -1,50 +1,54 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import * as childProcess from 'child_process'
-import { Transcriber, findWhisperModel } from '../src/transcriber.js'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 
-vi.mock('child_process')
+// Create the mock function before mocking the module
+const mockExecFile = mock()
+
+// Mock the module before importing the code that uses it
+mock.module('child_process', () => ({
+  execFile: mockExecFile,
+  execFileSync: mock(() => undefined),
+}))
+
+// Now import the module under test
+const { Transcriber, findWhisperModel } = await import('../src/transcriber.js')
 
 describe('Transcriber', () => {
   beforeEach(() => {
-    vi.restoreAllMocks()
+    mockExecFile.mockReset()
   })
 
   it('converts audio to WAV then runs whisper-cpp', async () => {
-    const execFileSpy = vi.mocked(childProcess.execFile)
-
     // Mock both execFile calls (ffmpeg and whisper-cpp) to call their callbacks with success
-    execFileSpy
-      .mockImplementationOnce((_cmd, _args, _opts, callback: any) => {
+    mockExecFile
+      .mockImplementationOnce((_cmd: string, _args: string[], _opts: unknown, callback: (err: null, stdout: string, stderr: string) => void) => {
         callback(null, '', '')
-        return {} as any
+        return {} as ReturnType<typeof import('child_process').execFile>
       })
-      .mockImplementationOnce((_cmd, _args, _opts, callback: any) => {
+      .mockImplementationOnce((_cmd: string, _args: string[], _opts: unknown, callback: (err: null, stdout: string, stderr: string) => void) => {
         callback(null, '', '')
-        return {} as any
+        return {} as ReturnType<typeof import('child_process').execFile>
       })
 
     const transcriber = new Transcriber('/models/ggml-large-v3-turbo.bin')
     await transcriber.transcribe('/audio/test.mp3', '/transcripts/test')
 
     // First call: ffmpeg conversion
-    expect(execFileSpy.mock.calls[0][0]).toBe('ffmpeg')
-    expect(execFileSpy.mock.calls[0][1]).toEqual(
+    expect(mockExecFile.mock.calls[0][0]).toBe('ffmpeg')
+    expect(mockExecFile.mock.calls[0][1]).toEqual(
       expect.arrayContaining(['-i', '/audio/test.mp3', '-ar', '16000', '-ac', '1']),
     )
 
     // Second call: whisper-cpp
-    expect(execFileSpy.mock.calls[1][0]).toBe('whisper-cpp')
-    expect(execFileSpy.mock.calls[1][1]).toEqual(
+    expect(mockExecFile.mock.calls[1][0]).toBe('whisper-cpp')
+    expect(mockExecFile.mock.calls[1][1]).toEqual(
       expect.arrayContaining(['-m', '/models/ggml-large-v3-turbo.bin', '-otxt']),
     )
   })
 
   it('throws when ffmpeg fails', async () => {
-    const execFileSpy = vi.mocked(childProcess.execFile)
-
-    execFileSpy.mockImplementationOnce((_cmd, _args, _opts, callback: any) => {
+    mockExecFile.mockImplementationOnce((_cmd: string, _args: string[], _opts: unknown, callback: (err: Error, stdout: string, stderr: string) => void) => {
       callback(new Error('ffmpeg not found'), '', '')
-      return {} as any
+      return {} as ReturnType<typeof import('child_process').execFile>
     })
 
     const transcriber = new Transcriber('/models/ggml-large-v3-turbo.bin')
@@ -54,16 +58,14 @@ describe('Transcriber', () => {
   })
 
   it('throws when whisper-cpp fails', async () => {
-    const execFileSpy = vi.mocked(childProcess.execFile)
-
-    execFileSpy
-      .mockImplementationOnce((_cmd, _args, _opts, callback: any) => {
+    mockExecFile
+      .mockImplementationOnce((_cmd: string, _args: string[], _opts: unknown, callback: (err: null, stdout: string, stderr: string) => void) => {
         callback(null, '', '')
-        return {} as any
+        return {} as ReturnType<typeof import('child_process').execFile>
       })
-      .mockImplementationOnce((_cmd, _args, _opts, callback: any) => {
+      .mockImplementationOnce((_cmd: string, _args: string[], _opts: unknown, callback: (err: Error, stdout: string, stderr: string) => void) => {
         callback(new Error('whisper-cpp failed'), '', '')
-        return {} as any
+        return {} as ReturnType<typeof import('child_process').execFile>
       })
 
     const transcriber = new Transcriber('/models/ggml-large-v3-turbo.bin')
