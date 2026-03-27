@@ -2,6 +2,8 @@ import { Command } from 'commander'
 import * as readline from 'readline'
 import * as os from 'os'
 import * as path from 'path'
+import * as fs from 'fs'
+import { execFileSync } from 'child_process'
 import { PlaudSyncConfig } from './config.js'
 import { PlaudAuth } from './auth.js'
 import { PlaudClient } from './client.js'
@@ -67,6 +69,79 @@ async function syncCommand(folder: string): Promise<void> {
   await syncRecordings(client, transcriber, folder)
 }
 
+const PLIST_LABEL = 'com.plaud-sync.agent'
+const PLIST_PATH = path.join(os.homedir(), 'Library', 'LaunchAgents', `${PLIST_LABEL}.plist`)
+const LOG_DIR = path.join(os.homedir(), '.plaud-sync', 'logs')
+
+function generatePlist(intervalMinutes: number, outputFolder: string): string {
+  const binPath = process.argv[1]
+  const tsxPath = process.argv[0]
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${PLIST_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${tsxPath}</string>
+    <string>${binPath}</string>
+    <string>sync</string>
+    <string>${outputFolder}</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>${intervalMinutes * 60}</integer>
+  <key>StandardOutPath</key>
+  <string>${path.join(LOG_DIR, 'stdout.log')}</string>
+  <key>StandardErrorPath</key>
+  <string>${path.join(LOG_DIR, 'stderr.log')}</string>
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>`
+}
+
+function installCommand(folder: string, options: { interval: string }): void {
+  const intervalMinutes = parseInt(options.interval, 10)
+  if (isNaN(intervalMinutes) || intervalMinutes < 1) {
+    process.stderr.write('Interval must be a positive number of minutes.\n')
+    process.exit(1)
+  }
+
+  fs.mkdirSync(LOG_DIR, { recursive: true })
+  fs.mkdirSync(path.dirname(PLIST_PATH), { recursive: true })
+
+  const plist = generatePlist(intervalMinutes, folder)
+  fs.writeFileSync(PLIST_PATH, plist)
+
+  try {
+    execFileSync('launchctl', ['unload', PLIST_PATH], { stdio: 'ignore' })
+  } catch {
+    // Ignore if not loaded
+  }
+  execFileSync('launchctl', ['load', PLIST_PATH])
+
+  process.stdout.write(`Installed. Syncing every ${intervalMinutes} minutes to ${folder}\n`)
+  process.stdout.write(`Logs: ${LOG_DIR}\n`)
+}
+
+function uninstallCommand(): void {
+  if (!fs.existsSync(PLIST_PATH)) {
+    process.stdout.write('LaunchAgent not installed.\n')
+    return
+  }
+
+  try {
+    execFileSync('launchctl', ['unload', PLIST_PATH])
+  } catch {
+    // Ignore if not loaded
+  }
+
+  fs.unlinkSync(PLIST_PATH)
+  process.stdout.write('LaunchAgent uninstalled.\n')
+}
+
 export function createProgram(): Command {
   const program = new Command()
   program.name('plaud-sync').description('Sync Plaud recordings and transcribe locally').version('0.1.0')
@@ -81,6 +156,18 @@ export function createProgram(): Command {
     .description('Sync recordings and transcribe locally')
     .argument('[folder]', 'Output folder', DEFAULT_OUTPUT)
     .action(syncCommand)
+
+  program
+    .command('install')
+    .description('Install launchd agent for automatic syncing')
+    .argument('[folder]', 'Output folder', DEFAULT_OUTPUT)
+    .option('--interval <minutes>', 'Sync interval in minutes', '30')
+    .action(installCommand)
+
+  program
+    .command('uninstall')
+    .description('Remove launchd agent')
+    .action(uninstallCommand)
 
   return program
 }
