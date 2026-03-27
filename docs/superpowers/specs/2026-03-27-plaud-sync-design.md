@@ -10,11 +10,10 @@ Single-package TypeScript CLI. No monorepo. Modules with clear boundaries: auth,
 
 ## Tech Stack
 
-- **Runtime:** Node.js + TypeScript
+- **Runtime:** Bun + TypeScript
 - **CLI framework:** commander
 - **Validation:** zod
-- **Testing:** vitest
-- **Execution:** tsx
+- **Testing:** bun:test
 - **Transcription:** whisper.cpp (system binary via Homebrew)
 - **Audio conversion:** ffmpeg (system binary via Homebrew)
 - **Model:** ggml-large-v3-turbo (default)
