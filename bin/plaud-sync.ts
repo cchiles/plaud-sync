@@ -1,4 +1,4 @@
 #!/usr/bin/env bun
-import { createProgram } from '../src/cli.js'
+import { run } from '../src/cli.js'
 
-createProgram().parse()
+run(process.argv.slice(2))

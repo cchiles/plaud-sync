@@ -1,4 +1,3 @@
-import { Command } from 'commander'
 import * as readline from 'readline'
 import * as os from 'os'
 import * as path from 'path'
@@ -102,8 +101,19 @@ function generatePlist(intervalMinutes: number, outputFolder: string): string {
 </plist>`
 }
 
-function installCommand(folder: string, options: { interval: string }): void {
-  const intervalMinutes = parseInt(options.interval, 10)
+function installCommand(args: string[]): void {
+  let folder = DEFAULT_OUTPUT
+  let intervalMinutes = 30
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--interval' && args[i + 1]) {
+      intervalMinutes = parseInt(args[i + 1], 10)
+      i++
+    } else {
+      folder = args[i]
+    }
+  }
+
   if (isNaN(intervalMinutes) || intervalMinutes < 1) {
     process.stderr.write('Interval must be a positive number of minutes.\n')
     process.exit(1)
@@ -142,32 +152,29 @@ function uninstallCommand(): void {
   process.stdout.write('LaunchAgent uninstalled.\n')
 }
 
-export function createProgram(): Command {
-  const program = new Command()
-  program.name('plaud-sync').description('Sync Plaud recordings and transcribe locally').version('0.1.0')
+const USAGE = `plaud-sync v0.1.0
 
-  program
-    .command('login')
-    .description('Configure Plaud credentials')
-    .action(loginCommand)
+Usage: plaud-sync <command> [options]
 
-  program
-    .command('sync')
-    .description('Sync recordings and transcribe locally')
-    .argument('[folder]', 'Output folder', DEFAULT_OUTPUT)
-    .action(syncCommand)
+Commands:
+  login                          Configure Plaud credentials
+  sync [folder]                  Sync recordings (default: ~/PlaudSync)
+  install [folder] [--interval]  Install launchd agent (default: 30 min)
+  uninstall                      Remove launchd agent`
 
-  program
-    .command('install')
-    .description('Install launchd agent for automatic syncing')
-    .argument('[folder]', 'Output folder', DEFAULT_OUTPUT)
-    .option('--interval <minutes>', 'Sync interval in minutes', '30')
-    .action(installCommand)
+export async function run(args: string[]): Promise<void> {
+  const command = args[0]
 
-  program
-    .command('uninstall')
-    .description('Remove launchd agent')
-    .action(uninstallCommand)
-
-  return program
+  switch (command) {
+    case 'login':
+      return loginCommand()
+    case 'sync':
+      return syncCommand(args[1] || DEFAULT_OUTPUT)
+    case 'install':
+      return installCommand(args.slice(1))
+    case 'uninstall':
+      return uninstallCommand()
+    default:
+      process.stdout.write(USAGE + '\n')
+  }
 }
