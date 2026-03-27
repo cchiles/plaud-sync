@@ -38,6 +38,8 @@ export async function syncRecordings(
   for (const rec of sorted) {
     const baseName = generateFilename(rec)
 
+    const audioExisted = !!findExistingAudio(audioDir, baseName)
+
     try {
       let audioPath = findExistingAudio(audioDir, baseName)
 
@@ -55,6 +57,12 @@ export async function syncRecordings(
       }
     } catch (err) {
       failed++
+      if (!audioExisted) {
+        for (const ext of ['mp3', 'opus']) {
+          const partial = path.join(audioDir, `${baseName}.${ext}`)
+          if (fs.existsSync(partial)) fs.unlinkSync(partial)
+        }
+      }
       const message = err instanceof Error ? err.message : String(err)
       process.stderr.write(`Failed to sync ${rec.filename} (${rec.id}): ${message}\n`)
     }
