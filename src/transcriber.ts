@@ -29,29 +29,12 @@ export class Transcriber {
   }
 
   async transcribe(audioPath: string, outputBasename: string): Promise<void> {
-    const wavPath = `${outputBasename}.tmp.wav`
-
-    try {
-      await execFilePromise('ffmpeg', [
-        '-i', audioPath,
-        '-ar', '16000',
-        '-ac', '1',
-        '-f', 'wav',
-        '-y',
-        wavPath,
-      ], { timeout: 120_000 })
-
-      await execFilePromise('whisper-cpp', [
-        '-m', this.modelPath,
-        '-f', wavPath,
-        '-otxt',
-        '-of', outputBasename,
-      ], { timeout: 600_000 })
-    } finally {
-      if (fs.existsSync(wavPath)) {
-        fs.unlinkSync(wavPath)
-      }
-    }
+    await execFilePromise('whisper-cpp', [
+      '-m', this.modelPath,
+      '-f', audioPath,
+      '-otxt',
+      '-of', outputBasename,
+    ], { timeout: 600_000 })
   }
 }
 
@@ -77,12 +60,6 @@ export function checkPrerequisites(modelPath: string | null): string[] {
     execFileSync('which', ['whisper-cpp'])
   } catch {
     errors.push('whisper-cpp not found. Install with: brew install whisper-cpp')
-  }
-
-  try {
-    execFileSync('which', ['ffmpeg'])
-  } catch {
-    errors.push('ffmpeg not found. Install with: brew install ffmpeg')
   }
 
   if (!modelPath) {
