@@ -70,7 +70,9 @@ async function syncCommand(folder: string): Promise<void> {
 
 const PLIST_LABEL = 'com.plaud-sync.agent'
 const PLIST_PATH = path.join(os.homedir(), 'Library', 'LaunchAgents', `${PLIST_LABEL}.plist`)
-const LOG_DIR = path.join(os.homedir(), '.plaud-sync', 'logs')
+const INSTALL_DIR = '/usr/local/bin'
+const BINARY_PATH = path.join(INSTALL_DIR, 'plaud-sync')
+const LOG_DIR = path.join(os.homedir(), 'Library', 'Logs', 'plaud-sync')
 
 function generatePlist(intervalMinutes: number, outputFolder: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -81,7 +83,7 @@ function generatePlist(intervalMinutes: number, outputFolder: string): string {
   <string>${PLIST_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>plaud-sync</string>
+    <string>${BINARY_PATH}</string>
     <string>sync</string>
     <string>${outputFolder}</string>
   </array>

@@ -6,7 +6,7 @@ A macOS CLI tool that authenticates with the Plaud API, downloads audio recordin
 
 ## Architecture
 
-Single-package TypeScript CLI. No monorepo. Modules with clear boundaries: auth, API client, transcription wrapper, sync engine, CLI commands. System dependencies: whisper.cpp and ffmpeg (both via Homebrew).
+Single-package TypeScript CLI compiled to a standalone binary via `bun build --compile`. Modules with clear boundaries: auth, API client, transcription wrapper, sync engine, CLI commands. System dependency: whisper.cpp (Homebrew).
 
 ## Tech Stack
 
@@ -15,7 +15,6 @@ Single-package TypeScript CLI. No monorepo. Modules with clear boundaries: auth,
 - **Validation:** zod
 - **Testing:** bun:test
 - **Transcription:** whisper.cpp (system binary via Homebrew)
-- **Audio conversion:** ffmpeg (system binary via Homebrew)
 - **Model:** ggml-large-v3-turbo (default)
 
 ## File Structure
@@ -40,12 +39,12 @@ plaud-sync/
     sync.test.ts
 ```
 
-## Config Directory
+## macOS Paths
 
-`~/.plaud-sync/` contains:
-
-- `config.json` — credentials + token (file mode 0o600)
-- `logs/` — log output from launchd runs
+- **Binary:** `/usr/local/bin/plaud-sync` (compiled standalone via `bun build --compile`)
+- **Config:** `~/Library/Application Support/plaud-sync/config.json` (mode 0o600)
+- **Logs:** `~/Library/Logs/plaud-sync/`
+- **LaunchAgent:** `~/Library/LaunchAgents/com.plaud-sync.agent.plist`
 
 ### config.json schema
 
@@ -127,9 +126,7 @@ No sync state file. The filesystem is the source of truth.
    c. Download audio — try MP3 URL first, fall back to raw opus
    d. Save to `{outputFolder}/audio/{name}.{ext}`
    e. Skip transcription if transcript file already exists in `transcripts/` subfolder
-   f. Convert audio to 16kHz mono WAV via ffmpeg
-   g. Transcribe WAV with whisper.cpp → save to `{outputFolder}/transcripts/{name}.txt`
-   h. Clean up temp WAV
+   f. Transcribe audio with whisper.cpp → save to `{outputFolder}/transcripts/{name}.txt`
 
 Every run checks all recordings against what's on disk. Already-downloaded and already-transcribed files are skipped. No state to track or corrupt.
 
@@ -152,11 +149,10 @@ Thin subprocess wrapper around the `whisper-cpp` binary.
 
 **Invocation:**
 ```bash
-ffmpeg -i input.mp3 -ar 16000 -ac 1 -f wav temp.wav
-whisper-cpp -m {modelPath} -f temp.wav -otxt -of {outputBasename}
+whisper-cpp -m {modelPath} -f input.mp3 -otxt -of {outputBasename}
 ```
 
-Always convert to WAV first via ffmpeg — one code path, no branching.
+The Homebrew whisper-cpp build includes ffmpeg support, so it reads MP3/opus directly.
 
 Produces `{outputBasename}.txt` with plain text.
 
@@ -170,9 +166,8 @@ Produces `{outputBasename}.txt` with plain text.
 
 Before syncing, verify:
 1. `whisper-cpp` binary is on PATH
-2. `ffmpeg` binary is on PATH
-3. Model file exists
-4. Credentials are configured and token is valid
+2. Model file exists
+3. Credentials are configured and token is valid
 
 Fail fast with clear error messages and install instructions.
 
@@ -197,9 +192,9 @@ Runs the sync engine. Accepts optional folder argument (defaults to `~/PlaudSync
 
 Generates and loads a LaunchAgent plist:
 - Location: `~/Library/LaunchAgents/com.plaud-sync.agent.plist`
-- Runs `plaud-sync sync` on a schedule
+- Uses full binary path (`/usr/local/bin/plaud-sync`) to avoid PATH issues
 - Default interval: 30 minutes (configurable via `--interval`, in minutes)
-- Stdout/stderr → `~/.plaud-sync/logs/`
+- Stdout/stderr → `~/Library/Logs/plaud-sync/`
 
 ### `uninstall`
 
