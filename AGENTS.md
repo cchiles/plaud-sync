@@ -5,18 +5,24 @@ A macOS CLI tool that syncs Plaud recordings and transcribes them locally using 
 ## Tech Stack
 
 - **Runtime:** Bun + TypeScript
-- **CLI:** commander
 - **Validation:** zod
 - **Testing:** bun:test
-- **System deps:** whisper.cpp, ffmpeg (Homebrew)
+- **System deps:** whisper-cpp (Homebrew)
+
+## Install
+
+```
+bun install
+bun link
+```
 
 ## Commands
 
 ```
-bun bin/plaud-sync.ts login                          # Configure credentials
-bun bin/plaud-sync.ts sync [folder]                  # Sync recordings (default: ~/PlaudSync)
-bun bin/plaud-sync.ts install [--interval 30]        # Install launchd agent
-bun bin/plaud-sync.ts uninstall                      # Remove launchd agent
+plaud-sync login                          # Configure credentials
+plaud-sync sync [folder]                  # Sync recordings (default: ~/PlaudSync)
+plaud-sync install [--interval 30]        # Install launchd agent
+plaud-sync uninstall                      # Remove launchd agent
 ```
 
 ## Running Tests

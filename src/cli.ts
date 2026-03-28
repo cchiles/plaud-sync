@@ -73,9 +73,6 @@ const PLIST_PATH = path.join(os.homedir(), 'Library', 'LaunchAgents', `${PLIST_L
 const LOG_DIR = path.join(os.homedir(), '.plaud-sync', 'logs')
 
 function generatePlist(intervalMinutes: number, outputFolder: string): string {
-  const binPath = process.argv[1]
-  const bunPath = process.execPath
-
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -84,8 +81,7 @@ function generatePlist(intervalMinutes: number, outputFolder: string): string {
   <string>${PLIST_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${bunPath}</string>
-    <string>${binPath}</string>
+    <string>plaud-sync</string>
     <string>sync</string>
     <string>${outputFolder}</string>
   </array>
