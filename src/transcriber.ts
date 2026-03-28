@@ -64,7 +64,7 @@ export function checkPrerequisites(modelPath: string | null): string[] {
 
   if (!modelPath) {
     errors.push(
-      'Whisper model not found. Download with: whisper-cpp-download-ggml-model large-v3-turbo',
+      'Whisper model not found. Run ./install.sh or download from https://huggingface.co/ggerganov/whisper.cpp',
     )
   }
 

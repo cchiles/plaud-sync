@@ -21,18 +21,27 @@ if ! command -v whisper-cpp &> /dev/null; then
   brew install whisper-cpp
 fi
 
-# Check for model (ARM and Intel paths)
-MODEL_FOUND=0
-for MODEL_DIR in /opt/homebrew/share/whisper-cpp/models /usr/local/share/whisper-cpp/models; do
-  if [ -f "$MODEL_DIR/ggml-large-v3-turbo.bin" ]; then
-    MODEL_FOUND=1
+# Find model directory
+MODEL_DIR=""
+for dir in /opt/homebrew/share/whisper-cpp/models /usr/local/share/whisper-cpp/models; do
+  if [ -d "$dir" ]; then
+    MODEL_DIR="$dir"
     break
   fi
 done
 
-if [ "$MODEL_FOUND" -eq 0 ]; then
+if [ -z "$MODEL_DIR" ]; then
+  echo "whisper-cpp models directory not found."
+  exit 1
+fi
+
+# Download model if missing
+MODEL_FILE="$MODEL_DIR/ggml-large-v3-turbo.bin"
+if [ ! -f "$MODEL_FILE" ]; then
   echo "Downloading whisper model (large-v3-turbo)..."
-  whisper-cpp-download-ggml-model large-v3-turbo
+  curl -L --progress-bar \
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin" \
+    -o "$MODEL_FILE"
 fi
 
 # Install dependencies
