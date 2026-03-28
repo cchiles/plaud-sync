@@ -29,7 +29,7 @@ export class Transcriber {
   }
 
   async transcribe(audioPath: string, outputBasename: string): Promise<void> {
-    await execFilePromise('whisper-cpp', [
+    await execFilePromise('whisper-cli', [
       '-m', this.modelPath,
       '-f', audioPath,
       '-otxt',
@@ -57,9 +57,9 @@ export function checkPrerequisites(modelPath: string | null): string[] {
   const errors: string[] = []
 
   try {
-    execFileSync('which', ['whisper-cpp'])
+    execFileSync('which', ['whisper-cli'])
   } catch {
-    errors.push('whisper-cpp not found. Install with: brew install whisper-cpp')
+    errors.push('whisper-cli not found. Install with: brew install whisper-cpp')
   }
 
   if (!modelPath) {

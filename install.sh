@@ -15,8 +15,8 @@ if ! command -v brew &> /dev/null; then
   exit 1
 fi
 
-# Check for whisper-cpp
-if ! command -v whisper-cpp &> /dev/null; then
+# Check for whisper-cli (provided by whisper-cpp package)
+if ! command -v whisper-cli &> /dev/null; then
   echo "Installing whisper-cpp..."
   brew install whisper-cpp
 fi
