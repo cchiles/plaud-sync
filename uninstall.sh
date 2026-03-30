@@ -3,7 +3,7 @@ set -e
 
 BINARY="/usr/local/bin/plaud-sync"
 PLIST="$HOME/Library/LaunchAgents/com.plaud-sync.agent.plist"
-CONFIG_DIR="$HOME/Library/Application Support/plaud-sync"
+CONFIG_DIR="$HOME/.config/plaud-sync"
 LOG_DIR="$HOME/Library/Logs/plaud-sync"
 
 # Unload LaunchAgent if present

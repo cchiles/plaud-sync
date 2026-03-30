@@ -4,7 +4,7 @@ import * as os from 'os'
 import { ConfigSchema } from './types.js'
 import type { TokenData, Config } from './types.js'
 
-const DEFAULT_DIR = path.join(os.homedir(), 'Library', 'Application Support', 'plaud-sync')
+const DEFAULT_DIR = path.join(os.homedir(), '.config', 'plaud-sync')
 const CONFIG_FILE = 'config.json'
 
 export class PlaudSyncConfig {
