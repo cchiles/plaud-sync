@@ -34,55 +34,73 @@ export async function syncRecordings(
   const sorted = [...recordings].sort((a, b) => a.start_time - b.start_time)
   process.stdout.write(`Found ${sorted.length} recording(s)\n`)
 
-  let synced = 0
-  let skipped = 0
-  let failed = 0
+  // Phase 1: Download
+  let downloaded = 0
+  let downloadFailed = 0
+  const audioFiles: { rec: PlaudRecording; audioPath: string; baseName: string }[] = []
 
   for (let i = 0; i < sorted.length; i++) {
     const rec = sorted[i]
     const baseName = generateFilename(rec)
+    const existing = findExistingAudio(audioDir, baseName)
+
+    if (existing) {
+      audioFiles.push({ rec, audioPath: existing, baseName })
+      continue
+    }
+
     const progress = `[${i + 1}/${sorted.length}]`
-
-    const audioExisted = !!findExistingAudio(audioDir, baseName)
-
+    process.stdout.write(`${progress} Downloading ${rec.filename}...`)
     try {
-      let audioPath = findExistingAudio(audioDir, baseName)
-      const transcriptPath = path.join(transcriptDir, `${baseName}.txt`)
-      const hasTranscript = fs.existsSync(transcriptPath)
-
-      if (audioPath && hasTranscript) {
-        skipped++
-        continue
-      }
-
-      if (!audioPath) {
-        process.stdout.write(`${progress} Downloading ${rec.filename}...`)
-        audioPath = await downloadRecording(client, rec.id, audioDir, baseName)
-        synced++
-        process.stdout.write(' done\n')
-      }
-
-      if (!hasTranscript) {
-        process.stdout.write(`${progress} Transcribing ${rec.filename}...`)
-        await transcriber.transcribe(audioPath, transcriptPath, hfToken)
-        process.stdout.write(' done\n')
-      }
+      const audioPath = await downloadRecording(client, rec.id, audioDir, baseName)
+      audioFiles.push({ rec, audioPath, baseName })
+      downloaded++
+      process.stdout.write(' done\n')
     } catch (err) {
-      failed++
+      downloadFailed++
       process.stdout.write(' failed\n')
-      if (!audioExisted) {
-        for (const ext of ['mp3', 'opus']) {
-          const partial = path.join(audioDir, `${baseName}.${ext}`)
-          if (fs.existsSync(partial)) fs.unlinkSync(partial)
-        }
-      }
       const message = err instanceof Error ? err.message : String(err)
       process.stderr.write(`  Error: ${message}\n`)
     }
   }
 
+  if (downloaded > 0) {
+    process.stdout.write(`\nDownloaded ${downloaded} recording(s)\n`)
+  }
+
+  // Phase 2: Transcribe
+  const needsTranscription = audioFiles.filter(
+    ({ baseName }) => !fs.existsSync(path.join(transcriptDir, `${baseName}.txt`)),
+  )
+
+  let transcribed = 0
+  let transcribeFailed = 0
+
+  if (needsTranscription.length > 0) {
+    process.stdout.write(`\nTranscribing ${needsTranscription.length} recording(s)...\n`)
+  }
+
+  for (let i = 0; i < needsTranscription.length; i++) {
+    const { rec, audioPath, baseName } = needsTranscription[i]
+    const transcriptPath = path.join(transcriptDir, `${baseName}.txt`)
+    const progress = `[${i + 1}/${needsTranscription.length}]`
+
+    process.stdout.write(`${progress} Transcribing ${rec.filename}...`)
+    try {
+      await transcriber.transcribe(audioPath, transcriptPath, hfToken)
+      transcribed++
+      process.stdout.write(' done\n')
+    } catch (err) {
+      transcribeFailed++
+      process.stdout.write(' failed\n')
+      const message = err instanceof Error ? err.message : String(err)
+      process.stderr.write(`  Error: ${message}\n`)
+    }
+  }
+
+  const skipped = sorted.length - downloaded - downloadFailed - needsTranscription.length + transcribed + transcribeFailed
   process.stdout.write(
-    `\nDone: ${synced} downloaded, ${skipped} skipped, ${failed} failed\n`,
+    `\nDone: ${downloaded} downloaded, ${transcribed} transcribed, ${skipped} skipped, ${downloadFailed + transcribeFailed} failed\n`,
   )
 }
 
