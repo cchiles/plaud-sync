@@ -9,17 +9,17 @@ if ! command -v bun &> /dev/null; then
   exit 1
 fi
 
-# Check for Python/pip
-if ! command -v pip &> /dev/null && ! command -v pip3 &> /dev/null; then
-  echo "pip not found. Install Python from: https://www.python.org/downloads/"
-  exit 1
+# Check for pipx
+if ! command -v pipx &> /dev/null; then
+  echo "Installing pipx..."
+  brew install pipx
+  pipx ensurepath
 fi
-PIP=$(command -v pip3 || command -v pip)
 
 # Check for whisperx
 if ! command -v whisperx &> /dev/null; then
   echo "Installing whisperx..."
-  $PIP install whisperx
+  pipx install whisperx
 fi
 
 # Check for HF_TOKEN
