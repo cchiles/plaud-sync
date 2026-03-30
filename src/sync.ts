@@ -18,13 +18,20 @@ function findExistingAudio(audioDir: string, baseName: string): string | null {
   return null
 }
 
+export interface SyncOptions {
+  hfToken?: string
+  concurrency?: number
+  audioOnly?: boolean
+  transcribeOnly?: boolean
+}
+
 export async function syncRecordings(
   client: PlaudClient,
   transcriber: Transcriber,
   outputFolder: string,
-  hfToken?: string,
-  concurrency: number = 2,
+  options: SyncOptions = {},
 ): Promise<void> {
+  const { hfToken, concurrency = 2, audioOnly = false, transcribeOnly = false } = options
   const audioDir = path.join(outputFolder, 'audio')
   const transcriptDir = path.join(outputFolder, 'transcripts')
   fs.mkdirSync(audioDir, { recursive: true })
@@ -35,38 +42,54 @@ export async function syncRecordings(
   const sorted = [...recordings].sort((a, b) => a.start_time - b.start_time)
   process.stdout.write(`Found ${sorted.length} recording(s)\n`)
 
-  // Phase 1: Download
+  // Phase 1: Download audio
   let downloaded = 0
   let downloadFailed = 0
   const audioFiles: { rec: PlaudRecording; audioPath: string; baseName: string }[] = []
 
-  for (let i = 0; i < sorted.length; i++) {
-    const rec = sorted[i]
-    const baseName = generateFilename(rec)
-    const existing = findExistingAudio(audioDir, baseName)
+  if (!transcribeOnly) {
+    for (let i = 0; i < sorted.length; i++) {
+      const rec = sorted[i]
+      const baseName = generateFilename(rec)
+      const existing = findExistingAudio(audioDir, baseName)
 
-    if (existing) {
-      audioFiles.push({ rec, audioPath: existing, baseName })
-      continue
+      if (existing) {
+        audioFiles.push({ rec, audioPath: existing, baseName })
+        continue
+      }
+
+      const progress = `[${i + 1}/${sorted.length}]`
+      process.stdout.write(`${progress} Downloading ${rec.filename}...`)
+      try {
+        const audioPath = await downloadRecording(client, rec.id, audioDir, baseName)
+        audioFiles.push({ rec, audioPath, baseName })
+        downloaded++
+        process.stdout.write(' done\n')
+      } catch (err) {
+        downloadFailed++
+        process.stdout.write(' failed\n')
+        const message = err instanceof Error ? err.message : String(err)
+        process.stderr.write(`  Error: ${message}\n`)
+      }
     }
 
-    const progress = `[${i + 1}/${sorted.length}]`
-    process.stdout.write(`${progress} Downloading ${rec.filename}...`)
-    try {
-      const audioPath = await downloadRecording(client, rec.id, audioDir, baseName)
-      audioFiles.push({ rec, audioPath, baseName })
-      downloaded++
-      process.stdout.write(' done\n')
-    } catch (err) {
-      downloadFailed++
-      process.stdout.write(' failed\n')
-      const message = err instanceof Error ? err.message : String(err)
-      process.stderr.write(`  Error: ${message}\n`)
+    if (downloaded > 0) {
+      process.stdout.write(`\nDownloaded ${downloaded} recording(s)\n`)
+    }
+  } else {
+    // transcribe-only: use existing audio files on disk
+    for (const rec of sorted) {
+      const baseName = generateFilename(rec)
+      const existing = findExistingAudio(audioDir, baseName)
+      if (existing) {
+        audioFiles.push({ rec, audioPath: existing, baseName })
+      }
     }
   }
 
-  if (downloaded > 0) {
-    process.stdout.write(`\nDownloaded ${downloaded} recording(s)\n`)
+  if (audioOnly) {
+    process.stdout.write(`\nDone: ${downloaded} downloaded, ${downloadFailed} failed\n`)
+    return
   }
 
   // Phase 2: Transcribe

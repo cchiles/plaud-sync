@@ -158,7 +158,13 @@ async function loginCommand(): Promise<void> {
   }
 }
 
-async function syncCommand(folder: string, concurrency: number): Promise<void> {
+interface SyncFlags {
+  concurrency: number
+  audioOnly: boolean
+  transcribeOnly: boolean
+}
+
+async function syncCommand(folder: string, flags: SyncFlags): Promise<void> {
   const config = new PlaudSyncConfig()
   const token = config.getToken()
 
@@ -186,7 +192,12 @@ async function syncCommand(folder: string, concurrency: number): Promise<void> {
   const client = new PlaudClient(auth, token.region)
   const transcriber = new Transcriber()
 
-  await syncRecordings(client, transcriber, folder, hfToken, concurrency)
+  await syncRecordings(client, transcriber, folder, {
+    hfToken,
+    concurrency: flags.concurrency,
+    audioOnly: flags.audioOnly,
+    transcribeOnly: flags.transcribeOnly,
+  })
 }
 
 const PLIST_LABEL = 'com.plaud-sync.agent'
@@ -277,7 +288,10 @@ Usage: plaud-sync <command> [options]
 
 Commands:
   login                          Authenticate via Plaud web app
-  sync [folder] [--concurrency N] Sync recordings (default: ~/PlaudSync, 2 parallel)
+  sync [folder] [options]          Sync recordings (default: ~/PlaudSync)
+    --audio-only                   Download audio only, skip transcription
+    --transcribe-only              Transcribe existing audio only, skip download
+    --concurrency N                Parallel transcriptions (default: 2)
   install [folder] [--interval]  Install launchd agent (default: 30 min)
   uninstall                      Remove launchd agent`
 
@@ -290,16 +304,22 @@ export async function run(args: string[]): Promise<void> {
     case 'sync': {
       let folder = DEFAULT_OUTPUT
       let concurrency = 2
+      let audioOnly = false
+      let transcribeOnly = false
       const syncArgs = args.slice(1)
       for (let i = 0; i < syncArgs.length; i++) {
         if (syncArgs[i] === '--concurrency' && syncArgs[i + 1]) {
           concurrency = parseInt(syncArgs[i + 1], 10)
           i++
+        } else if (syncArgs[i] === '--audio-only') {
+          audioOnly = true
+        } else if (syncArgs[i] === '--transcribe-only') {
+          transcribeOnly = true
         } else {
           folder = syncArgs[i]
         }
       }
-      return syncCommand(folder, concurrency)
+      return syncCommand(folder, { concurrency, audioOnly, transcribeOnly })
     }
     case 'install':
       return installCommand(args.slice(1))
