@@ -29,34 +29,47 @@ export async function syncRecordings(
   fs.mkdirSync(audioDir, { recursive: true })
   fs.mkdirSync(transcriptDir, { recursive: true })
 
+  process.stdout.write('Fetching recordings...\n')
   const recordings = await client.listRecordings()
   const sorted = [...recordings].sort((a, b) => a.start_time - b.start_time)
+  process.stdout.write(`Found ${sorted.length} recording(s)\n`)
 
   let synced = 0
   let skipped = 0
   let failed = 0
 
-  for (const rec of sorted) {
+  for (let i = 0; i < sorted.length; i++) {
+    const rec = sorted[i]
     const baseName = generateFilename(rec)
+    const progress = `[${i + 1}/${sorted.length}]`
 
     const audioExisted = !!findExistingAudio(audioDir, baseName)
 
     try {
       let audioPath = findExistingAudio(audioDir, baseName)
+      const transcriptPath = path.join(transcriptDir, `${baseName}.txt`)
+      const hasTranscript = fs.existsSync(transcriptPath)
 
-      if (!audioPath) {
-        audioPath = await downloadRecording(client, rec.id, audioDir, baseName)
-        synced++
-      } else {
+      if (audioPath && hasTranscript) {
         skipped++
+        continue
       }
 
-      const transcriptPath = path.join(transcriptDir, `${baseName}.txt`)
-      if (!fs.existsSync(transcriptPath)) {
+      if (!audioPath) {
+        process.stdout.write(`${progress} Downloading ${rec.filename}...`)
+        audioPath = await downloadRecording(client, rec.id, audioDir, baseName)
+        synced++
+        process.stdout.write(' done\n')
+      }
+
+      if (!hasTranscript) {
+        process.stdout.write(`${progress} Transcribing ${rec.filename}...`)
         await transcriber.transcribe(audioPath, transcriptPath, hfToken)
+        process.stdout.write(' done\n')
       }
     } catch (err) {
       failed++
+      process.stdout.write(' failed\n')
       if (!audioExisted) {
         for (const ext of ['mp3', 'opus']) {
           const partial = path.join(audioDir, `${baseName}.${ext}`)
@@ -64,12 +77,12 @@ export async function syncRecordings(
         }
       }
       const message = err instanceof Error ? err.message : String(err)
-      process.stderr.write(`Failed to sync ${rec.filename} (${rec.id}): ${message}\n`)
+      process.stderr.write(`  Error: ${message}\n`)
     }
   }
 
   process.stdout.write(
-    `Sync complete: ${synced} new, ${skipped} skipped, ${failed} failed (${sorted.length} total)\n`,
+    `\nDone: ${synced} downloaded, ${skipped} skipped, ${failed} failed\n`,
   )
 }
 
