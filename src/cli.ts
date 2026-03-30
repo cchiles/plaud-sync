@@ -162,6 +162,7 @@ interface SyncFlags {
   concurrency: number
   audioOnly: boolean
   transcribeOnly: boolean
+  verbose: boolean
 }
 
 async function syncCommand(folder: string, flags: SyncFlags): Promise<void> {
@@ -197,6 +198,7 @@ async function syncCommand(folder: string, flags: SyncFlags): Promise<void> {
     concurrency: flags.concurrency,
     audioOnly: flags.audioOnly,
     transcribeOnly: flags.transcribeOnly,
+    verbose: flags.verbose,
   })
 }
 
@@ -292,6 +294,7 @@ Commands:
     --audio-only                   Download audio only, skip transcription
     --transcribe-only              Transcribe existing audio only, skip download
     --concurrency N                Parallel transcriptions (default: 2)
+    --verbose                      Show whisperx output
   install [folder] [--interval]  Install launchd agent (default: 30 min)
   uninstall                      Remove launchd agent`
 
@@ -306,6 +309,7 @@ export async function run(args: string[]): Promise<void> {
       let concurrency = 2
       let audioOnly = false
       let transcribeOnly = false
+      let verbose = false
       const syncArgs = args.slice(1)
       for (let i = 0; i < syncArgs.length; i++) {
         if (syncArgs[i] === '--concurrency' && syncArgs[i + 1]) {
@@ -315,11 +319,13 @@ export async function run(args: string[]): Promise<void> {
           audioOnly = true
         } else if (syncArgs[i] === '--transcribe-only') {
           transcribeOnly = true
+        } else if (syncArgs[i] === '--verbose' || syncArgs[i] === '-v') {
+          verbose = true
         } else {
           folder = syncArgs[i]
         }
       }
-      return syncCommand(folder, { concurrency, audioOnly, transcribeOnly })
+      return syncCommand(folder, { concurrency, audioOnly, transcribeOnly, verbose })
     }
     case 'install':
       return installCommand(args.slice(1))

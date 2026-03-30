@@ -19,7 +19,7 @@ export class Transcriber {
     this.exec = exec ?? ((cmd, opts) => execSync(cmd, opts as any))
   }
 
-  async transcribe(audioPath: string, outputPath: string, hfToken?: string): Promise<void> {
+  async transcribe(audioPath: string, outputPath: string, hfToken?: string, verbose?: boolean): Promise<void> {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plaud-sync-'))
 
     try {
@@ -36,7 +36,7 @@ export class Transcriber {
 
       this.exec(`uvx whisperx ${args.map(a => `'${a}'`).join(' ')}`, {
         timeout: 600_000,
-        stdio: 'pipe',
+        stdio: verbose ? 'inherit' : 'pipe',
       })
 
       const baseName = path.basename(audioPath, path.extname(audioPath))

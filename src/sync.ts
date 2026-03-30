@@ -23,6 +23,7 @@ export interface SyncOptions {
   concurrency?: number
   audioOnly?: boolean
   transcribeOnly?: boolean
+  verbose?: boolean
 }
 
 export async function syncRecordings(
@@ -31,7 +32,7 @@ export async function syncRecordings(
   outputFolder: string,
   options: SyncOptions = {},
 ): Promise<void> {
-  const { hfToken, concurrency = 2, audioOnly = false, transcribeOnly = false } = options
+  const { hfToken, concurrency = 2, audioOnly = false, transcribeOnly = false, verbose = false } = options
   const audioDir = path.join(outputFolder, 'audio')
   const transcriptDir = path.join(outputFolder, 'transcripts')
   fs.mkdirSync(audioDir, { recursive: true })
@@ -116,7 +117,7 @@ export async function syncRecordings(
 
       process.stdout.write(`  Starting ${rec.filename}...\n`)
       try {
-        await transcriber.transcribe(audioPath, transcriptPath, hfToken)
+        await transcriber.transcribe(audioPath, transcriptPath, hfToken, verbose)
         transcribed++
         completed++
         process.stdout.write(`  [${completed}/${total}] ${rec.filename} done\n`)
