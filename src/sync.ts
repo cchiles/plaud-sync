@@ -22,6 +22,7 @@ export async function syncRecordings(
   client: PlaudClient,
   transcriber: Transcriber,
   outputFolder: string,
+  hfToken?: string,
 ): Promise<void> {
   const audioDir = path.join(outputFolder, 'audio')
   const transcriptDir = path.join(outputFolder, 'transcripts')
@@ -52,7 +53,7 @@ export async function syncRecordings(
 
       const transcriptPath = path.join(transcriptDir, `${baseName}.txt`)
       if (!fs.existsSync(transcriptPath)) {
-        await transcriber.transcribe(audioPath, transcriptPath)
+        await transcriber.transcribe(audioPath, transcriptPath, hfToken)
       }
     } catch (err) {
       failed++

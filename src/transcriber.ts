@@ -19,11 +19,10 @@ export class Transcriber {
     this.exec = exec ?? ((cmd, opts) => execSync(cmd, opts as any))
   }
 
-  async transcribe(audioPath: string, outputPath: string): Promise<void> {
+  async transcribe(audioPath: string, outputPath: string, hfToken?: string): Promise<void> {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plaud-sync-'))
 
     try {
-      const hfToken = process.env.HF_TOKEN
       const args = [
         audioPath,
         '--model', 'large-v3-turbo',
@@ -82,11 +81,7 @@ export function checkPrerequisites(): string[] {
     errors.push('uv not found. Install with: brew install uv')
   }
 
-  if (!process.env.HF_TOKEN) {
-    errors.push(
-      'HF_TOKEN not set. Required for speaker diarization. Get a token at https://huggingface.co/settings/tokens',
-    )
-  }
+  // HF token check is handled by the caller via config
 
   return errors
 }

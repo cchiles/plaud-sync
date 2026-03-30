@@ -41,4 +41,12 @@ export class PlaudSyncConfig {
   getToken(): TokenData | undefined {
     return this.load().token
   }
+
+  saveHfToken(hfToken: string): void {
+    this.save({ hfToken })
+  }
+
+  getHfToken(): string | undefined {
+    return this.load().hfToken ?? process.env.HF_TOKEN
+  }
 }

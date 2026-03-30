@@ -136,6 +136,19 @@ async function loginCommand(): Promise<void> {
     config.saveToken(tokenData)
     const expiresDate = new Date(tokenData.expiresAt).toLocaleDateString()
     process.stdout.write(`Login successful. Token saved (expires ${expiresDate}).\n`)
+
+    if (!config.getHfToken()) {
+      process.stdout.write('\nSpeaker diarization requires a Hugging Face token (free, read access).\n')
+      process.stdout.write('Setup: accept agreements at both URLs, then create a token:\n')
+      process.stdout.write('  https://huggingface.co/pyannote/speaker-diarization-3.1\n')
+      process.stdout.write('  https://huggingface.co/pyannote/segmentation-3.0\n')
+      process.stdout.write('  https://huggingface.co/settings/tokens\n\n')
+      const hfInput = await prompt('HF token (or Enter to skip): ')
+      if (hfInput) {
+        config.saveHfToken(hfInput)
+        process.stdout.write('HF token saved.\n')
+      }
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     process.stderr.write(`Login failed: ${message}\n`)
@@ -154,6 +167,12 @@ async function syncCommand(folder: string): Promise<void> {
     process.exit(1)
   }
 
+  const hfToken = config.getHfToken()
+  if (!hfToken) {
+    process.stderr.write('No HF token found. Run `plaud-sync login` or set HF_TOKEN.\n')
+    process.exit(1)
+  }
+
   const errors = checkPrerequisites()
   if (errors.length > 0) {
     process.stderr.write('Prerequisites missing:\n')
@@ -167,7 +186,7 @@ async function syncCommand(folder: string): Promise<void> {
   const client = new PlaudClient(auth, token.region)
   const transcriber = new Transcriber()
 
-  await syncRecordings(client, transcriber, folder)
+  await syncRecordings(client, transcriber, folder, hfToken)
 }
 
 const PLIST_LABEL = 'com.plaud-sync.agent'

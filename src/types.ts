@@ -25,6 +25,7 @@ export type TokenData = z.infer<typeof TokenDataSchema>
 
 export const ConfigSchema = z.object({
   token: TokenDataSchema.optional(),
+  hfToken: z.string().optional(),
 })
 
 export type Config = z.infer<typeof ConfigSchema>
