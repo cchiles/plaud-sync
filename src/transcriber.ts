@@ -35,7 +35,7 @@ export class Transcriber {
         args.push('--hf_token', hfToken)
       }
 
-      this.exec(`whisperx ${args.map(a => `'${a}'`).join(' ')}`, {
+      this.exec(`uvx whisperx ${args.map(a => `'${a}'`).join(' ')}`, {
         timeout: 600_000,
         stdio: 'pipe',
       })
@@ -77,9 +77,9 @@ export function checkPrerequisites(): string[] {
   const errors: string[] = []
 
   try {
-    execFileSync('which', ['whisperx'])
+    execFileSync('which', ['uv'])
   } catch {
-    errors.push('whisperx not found. Install with: pip install whisperx')
+    errors.push('uv not found. Install with: brew install uv')
   }
 
   if (!process.env.HF_TOKEN) {

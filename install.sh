@@ -9,17 +9,10 @@ if ! command -v bun &> /dev/null; then
   exit 1
 fi
 
-# Check for pipx
-if ! command -v pipx &> /dev/null; then
-  echo "Installing pipx..."
-  brew install pipx
-  pipx ensurepath
-fi
-
-# Check for whisperx
-if ! command -v whisperx &> /dev/null; then
-  echo "Installing whisperx..."
-  pipx install whisperx
+# Check for uv
+if ! command -v uv &> /dev/null; then
+  echo "Installing uv..."
+  brew install uv
 fi
 
 # Check for HF_TOKEN
