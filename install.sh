@@ -18,12 +18,14 @@ fi
 # Check for HF_TOKEN
 if [ -z "$HF_TOKEN" ]; then
   echo ""
-  echo "whisperx requires a Hugging Face token for speaker diarization."
-  echo "1. Get a token at: https://huggingface.co/settings/tokens"
-  echo "2. Accept the pyannote model agreement at:"
-  echo "   https://huggingface.co/pyannote/speaker-diarization-3.1"
-  echo "3. Add to your shell profile:"
-  echo "   export HF_TOKEN=hf_your_token_here"
+  echo "Speaker diarization requires a free Hugging Face token (read access)."
+  echo ""
+  echo "One-time setup:"
+  echo "  1. Create an account at https://huggingface.co/join"
+  echo "  2. Accept the user agreement for BOTH of these models:"
+  echo "     https://huggingface.co/pyannote/speaker-diarization-3.1"
+  echo "     https://huggingface.co/pyannote/segmentation-3.0"
+  echo "  3. Create a read token at https://huggingface.co/settings/tokens"
   echo ""
   read -p "Enter your HF token (or press Enter to skip): " HF_INPUT
   if [ -n "$HF_INPUT" ]; then
