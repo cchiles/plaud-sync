@@ -17,18 +17,8 @@ describe('PlaudSyncConfig', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
-  it('returns undefined credentials when no config exists', () => {
-    expect(config.getCredentials()).toBeUndefined()
-  })
-
   it('returns undefined token when no config exists', () => {
     expect(config.getToken()).toBeUndefined()
-  })
-
-  it('saves and loads credentials', () => {
-    const creds = { email: 'test@example.com', password: 'secret', region: 'us' as const }
-    config.saveCredentials(creds)
-    expect(config.getCredentials()).toEqual(creds)
   })
 
   it('saves and loads token', () => {
@@ -37,35 +27,34 @@ describe('PlaudSyncConfig', () => {
       tokenType: 'Bearer',
       issuedAt: 1000,
       expiresAt: 2000,
+      region: 'us' as const,
     }
     config.saveToken(token)
     expect(config.getToken()).toEqual(token)
   })
 
-  it('merges credentials and token without overwriting', () => {
-    const creds = { email: 'test@example.com', password: 'secret', region: 'eu' as const }
+  it('creates config directory with mode 0o700', () => {
     const token = {
       accessToken: 'abc123',
       tokenType: 'Bearer',
       issuedAt: 1000,
       expiresAt: 2000,
+      region: 'us' as const,
     }
-    config.saveCredentials(creds)
     config.saveToken(token)
-    expect(config.getCredentials()).toEqual(creds)
-    expect(config.getToken()).toEqual(token)
-  })
-
-  it('creates config directory with mode 0o700', () => {
-    const creds = { email: 'test@example.com', password: 'secret', region: 'us' as const }
-    config.saveCredentials(creds)
     const stats = fs.statSync(tmpDir)
     expect(stats.mode & 0o777).toBe(0o700)
   })
 
   it('creates config file with mode 0o600', () => {
-    const creds = { email: 'test@example.com', password: 'secret', region: 'us' as const }
-    config.saveCredentials(creds)
+    const token = {
+      accessToken: 'abc123',
+      tokenType: 'Bearer',
+      issuedAt: 1000,
+      expiresAt: 2000,
+      region: 'us' as const,
+    }
+    config.saveToken(token)
     const filePath = path.join(tmpDir, 'config.json')
     const stats = fs.statSync(filePath)
     expect(stats.mode & 0o777).toBe(0o600)

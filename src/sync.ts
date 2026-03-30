@@ -52,8 +52,7 @@ export async function syncRecordings(
 
       const transcriptPath = path.join(transcriptDir, `${baseName}.txt`)
       if (!fs.existsSync(transcriptPath)) {
-        const transcriptBasename = path.join(transcriptDir, baseName)
-        await transcriber.transcribe(audioPath, transcriptBasename)
+        await transcriber.transcribe(audioPath, transcriptPath)
       }
     } catch (err) {
       failed++

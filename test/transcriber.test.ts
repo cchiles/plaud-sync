@@ -1,53 +1,69 @@
-import { describe, it, expect, beforeEach, mock } from 'bun:test'
-
-const mockExecFile = mock()
-
-mock.module('child_process', () => ({
-  execFile: mockExecFile,
-  execFileSync: mock(() => undefined),
-}))
-
-const { Transcriber, findWhisperModel } = await import('../src/transcriber.js')
+import { describe, it, expect, mock } from 'bun:test'
+import * as fs from 'fs'
+import * as path from 'path'
+import * as os from 'os'
+import { Transcriber, checkPrerequisites } from '../src/transcriber.js'
 
 describe('Transcriber', () => {
-  beforeEach(() => {
-    mockExecFile.mockReset()
-  })
+  it('calls whisperx with diarize flag and formats output', async () => {
+    const segments = {
+      segments: [
+        { start: 0, end: 2, text: 'Hello there.', speaker: 'SPEAKER_00' },
+        { start: 2, end: 4, text: 'Hi, how are you?', speaker: 'SPEAKER_01' },
+      ],
+    }
 
-  it('calls whisper-cli with correct args', async () => {
-    mockExecFile.mockImplementationOnce((_cmd: string, _args: string[], _opts: unknown, callback: (err: null, stdout: string, stderr: string) => void) => {
-      callback(null, '', '')
-      return {} as ReturnType<typeof import('child_process').execFile>
+    const fakeExec = mock((cmd: string) => {
+      const match = cmd.match(/'--output_dir' '([^']+)'/)
+      if (match) {
+        const outDir = match[1]
+        fs.mkdirSync(outDir, { recursive: true })
+        fs.writeFileSync(path.join(outDir, 'test.json'), JSON.stringify(segments))
+      }
     })
 
-    const transcriber = new Transcriber('/models/ggml-large-v3-turbo.bin')
-    await transcriber.transcribe('/audio/test.mp3', '/transcripts/test')
+    const outputPath = path.join(os.tmpdir(), `plaud-test-${Date.now()}.txt`)
 
-    expect(mockExecFile.mock.calls[0][0]).toBe('whisper-cli')
-    expect(mockExecFile.mock.calls[0][1]).toEqual([
-      '-m', '/models/ggml-large-v3-turbo.bin',
-      '-f', '/audio/test.mp3',
-      '-otxt',
-      '-of', '/transcripts/test',
-    ])
+    try {
+      const transcriber = new Transcriber(fakeExec as any)
+      await transcriber.transcribe('/audio/test.mp3', outputPath)
+
+      expect(fakeExec).toHaveBeenCalledTimes(1)
+      const cmd = fakeExec.mock.calls[0][0] as string
+      expect(cmd).toContain('whisperx')
+      expect(cmd).toContain('--diarize')
+      expect(cmd).toContain('large-v3-turbo')
+
+      const result = fs.readFileSync(outputPath, 'utf-8')
+      expect(result).toContain('[SPEAKER_00]')
+      expect(result).toContain('Hello there.')
+      expect(result).toContain('[SPEAKER_01]')
+      expect(result).toContain('Hi, how are you?')
+    } finally {
+      if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath)
+    }
   })
 
-  it('throws when whisper-cli fails', async () => {
-    mockExecFile.mockImplementationOnce((_cmd: string, _args: string[], _opts: unknown, callback: (err: Error, stdout: string, stderr: string) => void) => {
-      callback(new Error('whisper-cli failed'), '', '')
-      return {} as ReturnType<typeof import('child_process').execFile>
+  it('throws when whisperx fails', async () => {
+    const fakeExec = mock(() => {
+      throw new Error('whisperx not found')
     })
 
-    const transcriber = new Transcriber('/models/ggml-large-v3-turbo.bin')
+    const transcriber = new Transcriber(fakeExec as any)
     await expect(
-      transcriber.transcribe('/audio/test.mp3', '/transcripts/test'),
-    ).rejects.toThrow('whisper-cli failed')
+      transcriber.transcribe('/audio/test.mp3', '/transcripts/test.txt'),
+    ).rejects.toThrow('whisperx not found')
   })
 })
 
-describe('findWhisperModel', () => {
-  it('returns null for nonexistent path', () => {
-    const result = findWhisperModel('/nonexistent/path/model.bin')
-    expect(result).toBeNull()
+describe('checkPrerequisites', () => {
+  it('returns error when HF_TOKEN is not set', () => {
+    const original = process.env.HF_TOKEN
+    delete process.env.HF_TOKEN
+
+    const errors = checkPrerequisites()
+    expect(errors.some((e: string) => e.includes('HF_TOKEN'))).toBe(true)
+
+    if (original) process.env.HF_TOKEN = original
   })
 })

@@ -13,14 +13,14 @@ describe('TokenDataSchema', () => {
     expect(result.success).toBe(true)
   })
 
-  test('defaults region to us when not provided', () => {
-    const result = TokenDataSchema.parse({
+  test('rejects missing region', () => {
+    const result = TokenDataSchema.safeParse({
       accessToken: 'eyJhbGciOiJIUzI1NiJ9.eyJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MTcyNjAwMDAwMH0.sig',
       tokenType: 'Bearer',
       issuedAt: 1700000000000,
       expiresAt: 1726000000000,
     })
-    expect(result.region).toBe('us')
+    expect(result.success).toBe(false)
   })
 
   test('rejects invalid region', () => {
@@ -36,7 +36,7 @@ describe('TokenDataSchema', () => {
 })
 
 describe('ConfigSchema', () => {
-  test('accepts config with only token (no credentials field)', () => {
+  test('accepts config with token', () => {
     const result = ConfigSchema.safeParse({
       token: {
         accessToken: 'tok',

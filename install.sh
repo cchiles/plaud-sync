@@ -9,39 +9,43 @@ if ! command -v bun &> /dev/null; then
   exit 1
 fi
 
-# Check for Homebrew
-if ! command -v brew &> /dev/null; then
-  echo "Homebrew not found. Install from: https://brew.sh"
+# Check for Python/pip
+if ! command -v pip &> /dev/null && ! command -v pip3 &> /dev/null; then
+  echo "pip not found. Install Python from: https://www.python.org/downloads/"
   exit 1
 fi
+PIP=$(command -v pip3 || command -v pip)
 
-# Check for whisper-cli (provided by whisper-cpp package)
-if ! command -v whisper-cli &> /dev/null; then
-  echo "Installing whisper-cpp..."
-  brew install whisper-cpp
+# Check for whisperx
+if ! command -v whisperx &> /dev/null; then
+  echo "Installing whisperx..."
+  $PIP install whisperx
 fi
 
-# Find model directory
-MODEL_DIR=""
-for dir in /opt/homebrew/share/whisper-cpp/models /usr/local/share/whisper-cpp/models; do
-  if [ -d "$dir" ]; then
-    MODEL_DIR="$dir"
-    break
+# Check for HF_TOKEN
+if [ -z "$HF_TOKEN" ]; then
+  echo ""
+  echo "whisperx requires a Hugging Face token for speaker diarization."
+  echo "1. Get a token at: https://huggingface.co/settings/tokens"
+  echo "2. Accept the pyannote model agreement at:"
+  echo "   https://huggingface.co/pyannote/speaker-diarization-3.1"
+  echo "3. Add to your shell profile:"
+  echo "   export HF_TOKEN=hf_your_token_here"
+  echo ""
+  read -p "Enter your HF token (or press Enter to skip): " HF_INPUT
+  if [ -n "$HF_INPUT" ]; then
+    export HF_TOKEN="$HF_INPUT"
+    # Detect shell and append to profile
+    if [ -f "$HOME/.zshrc" ]; then
+      echo "export HF_TOKEN=$HF_INPUT" >> "$HOME/.zshrc"
+      echo "Added HF_TOKEN to ~/.zshrc"
+    elif [ -f "$HOME/.bashrc" ]; then
+      echo "export HF_TOKEN=$HF_INPUT" >> "$HOME/.bashrc"
+      echo "Added HF_TOKEN to ~/.bashrc"
+    fi
+  else
+    echo "Skipping. Diarization won't work until HF_TOKEN is set."
   fi
-done
-
-if [ -z "$MODEL_DIR" ]; then
-  echo "whisper-cpp models directory not found."
-  exit 1
-fi
-
-# Download model if missing
-MODEL_FILE="$MODEL_DIR/ggml-large-v3-turbo.bin"
-if [ ! -f "$MODEL_FILE" ]; then
-  echo "Downloading whisper model (large-v3-turbo)..."
-  curl -L --progress-bar \
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin" \
-    -o "$MODEL_FILE"
 fi
 
 # Install dependencies
