@@ -34,7 +34,7 @@ export class Transcriber {
         args.push('--hf_token', hfToken)
       }
 
-      this.exec(`uvx whisperx ${args.map(a => `'${a}'`).join(' ')}`, {
+      this.exec(`uvx --python 3.12 whisperx ${args.map(a => `'${a}'`).join(' ')}`, {
         timeout: 600_000,
         stdio: verbose ? 'inherit' : 'pipe',
       })
