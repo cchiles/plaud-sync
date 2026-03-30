@@ -23,6 +23,7 @@ export async function syncRecordings(
   transcriber: Transcriber,
   outputFolder: string,
   hfToken?: string,
+  concurrency: number = 2,
 ): Promise<void> {
   const audioDir = path.join(outputFolder, 'audio')
   const transcriptDir = path.join(outputFolder, 'transcripts')
@@ -75,28 +76,39 @@ export async function syncRecordings(
 
   let transcribed = 0
   let transcribeFailed = 0
+  const total = needsTranscription.length
 
-  if (needsTranscription.length > 0) {
-    process.stdout.write(`\nTranscribing ${needsTranscription.length} recording(s)...\n`)
+  if (total > 0) {
+    process.stdout.write(`\nTranscribing ${total} recording(s) (${concurrency} parallel)...\n`)
   }
 
-  for (let i = 0; i < needsTranscription.length; i++) {
-    const { rec, audioPath, baseName } = needsTranscription[i]
-    const transcriptPath = path.join(transcriptDir, `${baseName}.txt`)
-    const progress = `[${i + 1}/${needsTranscription.length}]`
+  let nextIndex = 0
+  let completed = 0
 
-    process.stdout.write(`${progress} Transcribing ${rec.filename}...`)
-    try {
-      await transcriber.transcribe(audioPath, transcriptPath, hfToken)
-      transcribed++
-      process.stdout.write(' done\n')
-    } catch (err) {
-      transcribeFailed++
-      process.stdout.write(' failed\n')
-      const message = err instanceof Error ? err.message : String(err)
-      process.stderr.write(`  Error: ${message}\n`)
+  async function worker(): Promise<void> {
+    while (nextIndex < total) {
+      const i = nextIndex++
+      const { rec, audioPath, baseName } = needsTranscription[i]
+      const transcriptPath = path.join(transcriptDir, `${baseName}.txt`)
+
+      process.stdout.write(`  Starting ${rec.filename}...\n`)
+      try {
+        await transcriber.transcribe(audioPath, transcriptPath, hfToken)
+        transcribed++
+        completed++
+        process.stdout.write(`  [${completed}/${total}] ${rec.filename} done\n`)
+      } catch (err) {
+        transcribeFailed++
+        completed++
+        process.stdout.write(`  [${completed}/${total}] ${rec.filename} failed\n`)
+        const message = err instanceof Error ? err.message : String(err)
+        process.stderr.write(`    Error: ${message}\n`)
+      }
     }
   }
+
+  const workers = Array.from({ length: Math.min(concurrency, total) }, () => worker())
+  await Promise.all(workers)
 
   const skipped = sorted.length - downloaded - downloadFailed - needsTranscription.length + transcribed + transcribeFailed
   process.stdout.write(

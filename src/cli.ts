@@ -158,7 +158,7 @@ async function loginCommand(): Promise<void> {
   }
 }
 
-async function syncCommand(folder: string): Promise<void> {
+async function syncCommand(folder: string, concurrency: number): Promise<void> {
   const config = new PlaudSyncConfig()
   const token = config.getToken()
 
@@ -186,7 +186,7 @@ async function syncCommand(folder: string): Promise<void> {
   const client = new PlaudClient(auth, token.region)
   const transcriber = new Transcriber()
 
-  await syncRecordings(client, transcriber, folder, hfToken)
+  await syncRecordings(client, transcriber, folder, hfToken, concurrency)
 }
 
 const PLIST_LABEL = 'com.plaud-sync.agent'
@@ -277,7 +277,7 @@ Usage: plaud-sync <command> [options]
 
 Commands:
   login                          Authenticate via Plaud web app
-  sync [folder]                  Sync recordings (default: ~/PlaudSync)
+  sync [folder] [--concurrency N] Sync recordings (default: ~/PlaudSync, 2 parallel)
   install [folder] [--interval]  Install launchd agent (default: 30 min)
   uninstall                      Remove launchd agent`
 
@@ -287,8 +287,20 @@ export async function run(args: string[]): Promise<void> {
   switch (command) {
     case 'login':
       return loginCommand()
-    case 'sync':
-      return syncCommand(args[1] || DEFAULT_OUTPUT)
+    case 'sync': {
+      let folder = DEFAULT_OUTPUT
+      let concurrency = 2
+      const syncArgs = args.slice(1)
+      for (let i = 0; i < syncArgs.length; i++) {
+        if (syncArgs[i] === '--concurrency' && syncArgs[i + 1]) {
+          concurrency = parseInt(syncArgs[i + 1], 10)
+          i++
+        } else {
+          folder = syncArgs[i]
+        }
+      }
+      return syncCommand(folder, concurrency)
+    }
     case 'install':
       return installCommand(args.slice(1))
     case 'uninstall':
