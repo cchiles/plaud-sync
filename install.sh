@@ -55,5 +55,13 @@ echo "Installing to $INSTALL_DIR/plaud-sync..."
 sudo mv plaud-sync "$INSTALL_DIR/plaud-sync"
 sudo chmod 755 "$INSTALL_DIR/plaud-sync"
 
+# Pre-download mlx-whisper model so first sync is fast
+echo "Pre-downloading mlx-whisper model (large-v3-turbo)..."
+uvx --python 3.12 --from mlx-whisper python -c "
+from huggingface_hub import snapshot_download
+snapshot_download('mlx-community/whisper-large-v3-turbo')
+print('Model cached.')
+"
+
 echo ""
 echo "Installed. Run 'plaud-sync login' to get started."

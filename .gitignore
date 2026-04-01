@@ -5,3 +5,4 @@ dist/
 *.js.map
 .DS_Store
 .claude/worktrees/
+src/__pycache__/
