@@ -80,6 +80,8 @@ export class Transcriber {
         '--language', 'en',
         '--output-format', 'json',
         '--output-dir', tmpDir,
+        '--hallucination-silence-threshold', '2',
+        '--compression-ratio-threshold', '2.0',
       ]
 
       const hfEnv = hfToken ? { HF_TOKEN: hfToken } : {}
