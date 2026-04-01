@@ -3,6 +3,36 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 
+const DIARIZE_PY = `#!/usr/bin/env python3
+import sys
+import json
+from pyannote.audio import Pipeline
+
+def main():
+    audio_path = sys.argv[1]
+    hf_token = sys.argv[2]
+
+    pipeline = Pipeline.from_pretrained(
+        "pyannote/speaker-diarization-3.1",
+        use_auth_token=hf_token,
+    )
+
+    diarization = pipeline(audio_path)
+
+    segments = []
+    for turn, _, speaker in diarization.itertracks(yield_label=True):
+        segments.append({
+            "start": round(turn.start, 3),
+            "end": round(turn.end, 3),
+            "speaker": speaker,
+        })
+
+    json.dump(segments, sys.stdout)
+
+if __name__ == "__main__":
+    main()
+`
+
 interface MlxWhisperSegment {
   id: number
   start: number
@@ -103,7 +133,8 @@ export class Transcriber {
       }
 
       // Phase 2: Diarize with pyannote
-      const diarizeScript = path.join(path.dirname(new URL(import.meta.url).pathname), 'diarize.py')
+      const diarizeScript = path.join(tmpDir, 'diarize.py')
+      fs.writeFileSync(diarizeScript, DIARIZE_PY)
       const diarizeArgs = [
         'run', '--python', '3.12',
         '--with', 'pyannote-audio',
