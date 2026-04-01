@@ -52,6 +52,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: plaud-sync-darwin-arm64
+
       - name: Update Homebrew formula
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -61,8 +65,7 @@ jobs:
 
           URL="https://github.com/cchiles/plaud-sync/releases/download/${TAG}/plaud-sync-darwin-arm64.tar.gz"
 
-          curl -sL "$URL" -o plaud-sync.tar.gz
-          SHA=$(sha256sum plaud-sync.tar.gz | awk '{print $1}')
+          SHA=$(sha256sum plaud-sync-darwin-arm64.tar.gz | awk '{print $1}')
 
           cat > plaud-sync.rb <<FORMULA
           class PlaudSync < Formula
