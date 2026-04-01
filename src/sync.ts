@@ -24,6 +24,7 @@ export interface SyncOptions {
   audioOnly?: boolean
   transcribeOnly?: boolean
   verbose?: boolean
+  noDiarize?: boolean
 }
 
 export async function syncRecordings(
@@ -32,7 +33,7 @@ export async function syncRecordings(
   outputFolder: string,
   options: SyncOptions = {},
 ): Promise<void> {
-  const { hfToken, concurrency = 2, audioOnly = false, transcribeOnly = false, verbose = false } = options
+  const { hfToken, concurrency = 1, audioOnly = false, transcribeOnly = false, verbose = false, noDiarize = false } = options
   const audioDir = path.join(outputFolder, 'audio')
   const transcriptDir = path.join(outputFolder, 'transcripts')
   fs.mkdirSync(audioDir, { recursive: true })
@@ -115,16 +116,37 @@ export async function syncRecordings(
       const { rec, audioPath, baseName } = needsTranscription[i]
       const transcriptPath = path.join(transcriptDir, `${baseName}.txt`)
 
-      process.stdout.write(`  Starting ${rec.filename}...\n`)
+      const start = Date.now()
+      const timer = verbose ? null : setInterval(() => {
+        const elapsed = Math.floor((Date.now() - start) / 1000)
+        process.stdout.write(`\r  [${completed + 1}/${total}] ${rec.filename} (${elapsed}s)`)
+      }, 1000)
+      if (verbose) {
+        process.stdout.write(`  [${completed + 1}/${total}] ${rec.filename}\n`)
+      } else {
+        process.stdout.write(`  [${completed + 1}/${total}] ${rec.filename} (0s)`)
+      }
       try {
-        await transcriber.transcribe(audioPath, transcriptPath, hfToken, verbose)
+        await transcriber.transcribe(audioPath, transcriptPath, hfToken, verbose, noDiarize)
+        if (timer) clearInterval(timer)
+        const elapsed = Math.floor((Date.now() - start) / 1000)
         transcribed++
         completed++
-        process.stdout.write(`  [${completed}/${total}] ${rec.filename} done\n`)
+        if (verbose) {
+          process.stdout.write(`  [${completed}/${total}] ${rec.filename} done (${elapsed}s)\n`)
+        } else {
+          process.stdout.write(`\r  [${completed}/${total}] ${rec.filename} done (${elapsed}s)\n`)
+        }
       } catch (err) {
+        if (timer) clearInterval(timer)
+        const elapsed = Math.floor((Date.now() - start) / 1000)
         transcribeFailed++
         completed++
-        process.stdout.write(`  [${completed}/${total}] ${rec.filename} failed\n`)
+        if (verbose) {
+          process.stdout.write(`  [${completed}/${total}] ${rec.filename} failed (${elapsed}s)\n`)
+        } else {
+          process.stdout.write(`\r  [${completed}/${total}] ${rec.filename} failed (${elapsed}s)\n`)
+        }
         const message = err instanceof Error ? err.message : String(err)
         process.stderr.write(`    Error: ${message}\n`)
       }

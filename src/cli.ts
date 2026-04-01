@@ -163,6 +163,7 @@ interface SyncFlags {
   audioOnly: boolean
   transcribeOnly: boolean
   verbose: boolean
+  noDiarize: boolean
 }
 
 async function syncCommand(folder: string, flags: SyncFlags): Promise<void> {
@@ -175,7 +176,7 @@ async function syncCommand(folder: string, flags: SyncFlags): Promise<void> {
   }
 
   const hfToken = config.getHfToken()
-  if (!hfToken) {
+  if (!hfToken && !flags.noDiarize) {
     process.stderr.write('No HF token found. Run `plaud-sync login` or set HF_TOKEN.\n')
     process.exit(1)
   }
@@ -199,6 +200,7 @@ async function syncCommand(folder: string, flags: SyncFlags): Promise<void> {
     audioOnly: flags.audioOnly,
     transcribeOnly: flags.transcribeOnly,
     verbose: flags.verbose,
+    noDiarize: flags.noDiarize,
   })
 }
 
@@ -293,8 +295,9 @@ Commands:
   sync [folder] [options]          Sync recordings (default: ~/PlaudSync)
     --audio-only                   Download audio only, skip transcription
     --transcribe-only              Transcribe existing audio only, skip download
-    --concurrency N                Parallel transcriptions (default: 2)
-    --verbose                      Show whisperx output
+    --concurrency N                Parallel transcriptions (default: 1)
+    --verbose                      Show transcription output
+    --no-diarize                   Skip speaker diarization
   install [folder] [--interval]  Install launchd agent (default: 30 min)
   uninstall                      Remove launchd agent`
 
@@ -306,10 +309,11 @@ export async function run(args: string[]): Promise<void> {
       return loginCommand()
     case 'sync': {
       let folder = DEFAULT_OUTPUT
-      let concurrency = 2
+      let concurrency = 1
       let audioOnly = false
       let transcribeOnly = false
       let verbose = false
+      let noDiarize = false
       const syncArgs = args.slice(1)
       for (let i = 0; i < syncArgs.length; i++) {
         if (syncArgs[i] === '--concurrency' && syncArgs[i + 1]) {
@@ -321,11 +325,13 @@ export async function run(args: string[]): Promise<void> {
           transcribeOnly = true
         } else if (syncArgs[i] === '--verbose' || syncArgs[i] === '-v') {
           verbose = true
+        } else if (syncArgs[i] === '--no-diarize') {
+          noDiarize = true
         } else {
           folder = syncArgs[i]
         }
       }
-      return syncCommand(folder, { concurrency, audioOnly, transcribeOnly, verbose })
+      return syncCommand(folder, { concurrency, audioOnly, transcribeOnly, verbose, noDiarize })
     }
     case 'install':
       return installCommand(args.slice(1))
