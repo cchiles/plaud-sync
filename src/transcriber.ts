@@ -23,10 +23,11 @@ interface MergedSegment {
   speaker: string
 }
 
-function runProcess(cmd: string, args: string[], verbose: boolean): Promise<string> {
+function runProcess(cmd: string, args: string[], verbose: boolean, env?: Record<string, string>): Promise<string> {
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args, {
       stdio: ['ignore', 'pipe', verbose ? 'inherit' : 'pipe'],
+      env: { ...process.env, ...env },
     })
 
     const chunks: Buffer[] = []
@@ -81,7 +82,8 @@ export class Transcriber {
         '--output-dir', tmpDir,
       ]
 
-      await runProcess('uvx', mlxArgs, verbose)
+      const hfEnv = hfToken ? { HF_TOKEN: hfToken } : {}
+      await runProcess('uvx', mlxArgs, verbose, hfEnv)
 
       const baseName = path.basename(audioPath, path.extname(audioPath))
       const jsonPath = path.join(tmpDir, `${baseName}.json`)
