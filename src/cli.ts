@@ -11,7 +11,6 @@ import { syncRecordings } from './sync.js'
 import type { TokenData } from './types.js'
 
 const DEFAULT_OUTPUT = path.join(os.homedir(), 'PlaudSync')
-const LOGIN_TIMEOUT_MS = 5 * 60 * 1000
 
 function prompt(question: string): Promise<string> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
@@ -57,68 +56,10 @@ export function parseTokenFromCapture(
   }
 }
 
-const CORS_HEADERS: Record<string, string> = {
-  'Access-Control-Allow-Origin': 'https://web.plaud.ai',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-}
-
-function waitForToken(
-  fallbackRegion: 'us' | 'eu',
-): { promise: Promise<TokenData>; server: ReturnType<typeof Bun.serve> } {
-  let resolveToken: (token: TokenData) => void
-  let rejectToken: (err: Error) => void
-
-  const promise = new Promise<TokenData>((resolve, reject) => {
-    resolveToken = resolve
-    rejectToken = reject
-  })
-
-  const timeout = setTimeout(() => {
-    server.stop()
-    rejectToken(new Error('Login timed out after 5 minutes. Please try again.'))
-  }, LOGIN_TIMEOUT_MS)
-
-  const server = Bun.serve({
-    port: 0,
-    fetch: async (req) => {
-      if (req.method === 'OPTIONS') {
-        return new Response(null, { status: 204, headers: CORS_HEADERS })
-      }
-
-      if (req.method === 'POST' && new URL(req.url).pathname === '/capture') {
-        try {
-          const body = await req.json()
-          const tokenData = parseTokenFromCapture(body, fallbackRegion)
-          clearTimeout(timeout)
-          resolveToken(tokenData)
-          return new Response(JSON.stringify({ ok: true }), {
-            headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
-          })
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err)
-          process.stderr.write(`  Invalid token received: ${message}\n`)
-          process.stderr.write('  Please try again.\n')
-          return new Response(JSON.stringify({ error: message }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
-          })
-        }
-      }
-
-      return new Response('Not found', { status: 404, headers: CORS_HEADERS })
-    },
-  })
-
-  return { promise, server }
-}
 
 async function loginCommand(): Promise<void> {
   const regionInput = await prompt('Region (us/eu) [us]: ')
   const region = (regionInput === 'eu' ? 'eu' : 'us') as 'us' | 'eu'
-
-  const { promise, server } = waitForToken(region)
-  const port = server.port
 
   Bun.spawn(['open', 'https://web.plaud.ai'])
 
@@ -126,12 +67,15 @@ async function loginCommand(): Promise<void> {
   process.stdout.write('  1. On the web.plaud.ai tab, open DevTools (Cmd+Option+J)\n')
   process.stdout.write('  2. Paste this command and press Enter:\n\n')
   process.stdout.write(
-    `     fetch('http://localhost:${port}/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:localStorage.getItem('tokenstr'),domain:localStorage.getItem('plaud_user_api_domain')})})\n\n`,
+    `     JSON.stringify({token:localStorage.getItem('tokenstr'),domain:localStorage.getItem('plaud_user_api_domain')})\n\n`,
   )
-  process.stdout.write('Waiting for token...\n')
+  process.stdout.write('  3. Copy the JSON output\n\n')
+
+  const jsonInput = await prompt('Paste the JSON here: ')
 
   try {
-    const tokenData = await promise
+    const body = JSON.parse(jsonInput)
+    const tokenData = parseTokenFromCapture(body, region)
     const config = new PlaudSyncConfig()
     config.saveToken(tokenData)
     const expiresDate = new Date(tokenData.expiresAt).toLocaleDateString()
@@ -153,8 +97,6 @@ async function loginCommand(): Promise<void> {
     const message = err instanceof Error ? err.message : String(err)
     process.stderr.write(`Login failed: ${message}\n`)
     process.exit(1)
-  } finally {
-    server.stop()
   }
 }
 
