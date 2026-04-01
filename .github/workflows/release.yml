@@ -10,19 +10,7 @@ permissions:
 
 jobs:
   build:
-    strategy:
-      matrix:
-        include:
-          - os: macos-14
-            arch: aarch64
-            target: bun-darwin-arm64
-            artifact: plaud-sync-darwin-arm64
-          - os: macos-13
-            arch: x86_64
-            target: bun-darwin-x64
-            artifact: plaud-sync-darwin-x64
-
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-14
 
     steps:
       - uses: actions/checkout@v4
@@ -35,13 +23,13 @@ jobs:
 
       - name: Build standalone binary
         run: |
-          bun build bin/plaud-sync.ts --compile --target=${{ matrix.target }} --outfile plaud-sync
-          tar -czf ${{ matrix.artifact }}.tar.gz plaud-sync
+          bun build bin/plaud-sync.ts --compile --outfile plaud-sync
+          tar -czf plaud-sync-darwin-arm64.tar.gz plaud-sync
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}.tar.gz
+          name: plaud-sync-darwin-arm64
+          path: plaud-sync-darwin-arm64.tar.gz
 
   release:
     needs: build
@@ -71,14 +59,10 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           TAG="${GITHUB_REF_NAME}"
 
-          ARM64_URL="https://github.com/cchiles/plaud-sync/releases/download/${TAG}/plaud-sync-darwin-arm64.tar.gz"
-          X64_URL="https://github.com/cchiles/plaud-sync/releases/download/${TAG}/plaud-sync-darwin-x64.tar.gz"
+          URL="https://github.com/cchiles/plaud-sync/releases/download/${TAG}/plaud-sync-darwin-arm64.tar.gz"
 
-          curl -sL "$ARM64_URL" -o arm64.tar.gz
-          curl -sL "$X64_URL" -o x64.tar.gz
-
-          ARM64_SHA=$(sha256sum arm64.tar.gz | awk '{print $1}')
-          X64_SHA=$(sha256sum x64.tar.gz | awk '{print $1}')
+          curl -sL "$URL" -o plaud-sync.tar.gz
+          SHA=$(sha256sum plaud-sync.tar.gz | awk '{print $1}')
 
           cat > plaud-sync.rb <<FORMULA
           class PlaudSync < Formula
@@ -87,17 +71,11 @@ jobs:
             version "${VERSION}"
             license "MIT"
 
+            depends_on arch: :arm64
             depends_on "uv"
 
-            on_macos do
-              if Hardware::CPU.arm?
-                url "${ARM64_URL}"
-                sha256 "${ARM64_SHA}"
-              else
-                url "${X64_URL}"
-                sha256 "${X64_SHA}"
-              end
-            end
+            url "${URL}"
+            sha256 "${SHA}"
 
             def install
               bin.install "plaud-sync"
