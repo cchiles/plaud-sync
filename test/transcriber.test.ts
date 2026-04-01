@@ -30,7 +30,7 @@ describe('Transcriber', () => {
       callCount++
       if (callCount === 1) {
         // mlx_whisper call — write JSON to output dir
-        const outDirIdx = args.indexOf('--output_dir')
+        const outDirIdx = args.indexOf('--output-dir')
         if (outDirIdx !== -1) {
           const outDir = args[outDirIdx + 1]
           fs.mkdirSync(outDir, { recursive: true })
@@ -89,7 +89,7 @@ describe('Transcriber', () => {
       emitter.stdout = new EventEmitter()
       emitter.stderr = new EventEmitter()
 
-      const outDirIdx = args.indexOf('--output_dir')
+      const outDirIdx = args.indexOf('--output-dir')
       if (outDirIdx !== -1) {
         const outDir = args[outDirIdx + 1]
         fs.mkdirSync(outDir, { recursive: true })

@@ -77,8 +77,8 @@ export class Transcriber {
         audioPath,
         '--model', 'mlx-community/whisper-large-v3-turbo',
         '--language', 'en',
-        '--output_format', 'json',
-        '--output_dir', tmpDir,
+        '--output-format', 'json',
+        '--output-dir', tmpDir,
       ]
 
       await runProcess('uvx', mlxArgs, verbose)
