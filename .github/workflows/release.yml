@@ -103,6 +103,15 @@ jobs:
               bin.install "plaud-sync"
             end
 
+            service do
+              run [opt_bin/"plaud-sync", "sync"]
+              run_type :interval
+              interval 1800
+              log_path var/"log/plaud-sync/stdout.log"
+              error_log_path var/"log/plaud-sync/stderr.log"
+              working_dir Dir.home
+            end
+
             test do
               assert_match "plaud-sync", shell_output("#{bin}/plaud-sync 2>&1", 0)
             end
