@@ -74,7 +74,8 @@ async function loginCommand(): Promise<void> {
   const jsonInput = await prompt('Paste the JSON here: ')
 
   try {
-    const body = JSON.parse(jsonInput)
+    const cleaned = jsonInput.replace(/^['"`]+|['"`]+$/g, '')
+    const body = JSON.parse(cleaned)
     const tokenData = parseTokenFromCapture(body, region)
     const config = new PlaudSyncConfig()
     config.saveToken(tokenData)
