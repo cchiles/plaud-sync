@@ -80,6 +80,7 @@ export class Transcriber {
         '--language', 'en',
         '--output-format', 'json',
         '--output-dir', tmpDir,
+        '--word-timestamps', 'True',
         '--hallucination-silence-threshold', '2',
         '--compression-ratio-threshold', '2.0',
       ]
