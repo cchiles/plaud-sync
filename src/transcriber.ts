@@ -143,7 +143,7 @@ export class Transcriber {
         'python', diarizeScript, audioPath, hfToken,
       ]
 
-      const diarizeJson = await runProcess('uv', diarizeArgs, verbose)
+      const diarizeJson = await runProcess('uv', diarizeArgs, verbose, hfEnv)
       const diarization = JSON.parse(diarizeJson) as DiarizeSegment[]
 
       // Merge and format
