@@ -26,6 +26,7 @@ export interface SyncOptions {
   transcribeOnly?: boolean
   verbose?: boolean
   noDiarize?: boolean
+  retranscribe?: boolean
 }
 
 export async function syncRecordings(
@@ -34,7 +35,7 @@ export async function syncRecordings(
   outputFolder: string,
   options: SyncOptions = {},
 ): Promise<void> {
-  const { hfToken, concurrency = 1, audioOnly = false, transcribeOnly = false, verbose = false, noDiarize = false } = options
+  const { hfToken, concurrency = 1, audioOnly = false, transcribeOnly = false, verbose = false, noDiarize = false, retranscribe = false } = options
   const audioDir = path.join(outputFolder, 'audio')
   const transcriptDir = path.join(outputFolder, 'transcripts')
   fs.mkdirSync(audioDir, { recursive: true })
@@ -122,10 +123,12 @@ export async function syncRecordings(
     }
 
     // Phase 2: Transcribe
-    const needsTranscription = audioFiles.filter(
-      ({ rec, baseName }) =>
-        !db.isTranscribed(rec.id) && !fs.existsSync(path.join(transcriptDir, `${baseName}.txt`)),
-    )
+    const needsTranscription = retranscribe
+      ? audioFiles
+      : audioFiles.filter(
+          ({ rec, baseName }) =>
+            !db.isTranscribed(rec.id) && !fs.existsSync(path.join(transcriptDir, `${baseName}.txt`)),
+        )
 
     let transcribed = 0
     let transcribeFailed = 0

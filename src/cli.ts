@@ -107,6 +107,7 @@ interface SyncFlags {
   transcribeOnly: boolean
   verbose: boolean
   noDiarize: boolean
+  retranscribe: boolean
 }
 
 async function syncCommand(folder: string, flags: SyncFlags): Promise<void> {
@@ -144,6 +145,7 @@ async function syncCommand(folder: string, flags: SyncFlags): Promise<void> {
     transcribeOnly: flags.transcribeOnly,
     verbose: flags.verbose,
     noDiarize: flags.noDiarize,
+    retranscribe: flags.retranscribe,
   })
 }
 
@@ -238,9 +240,10 @@ Commands:
   sync [folder] [options]          Sync recordings (default: ~/PlaudSync)
     --audio-only                   Download audio only, skip transcription
     --transcribe-only              Transcribe existing audio only, skip download
-    --concurrency N                Parallel transcriptions (default: 1)
+    --concurrency N                Parallel transcriptions (default: 3)
     --verbose                      Show transcription output
     --no-diarize                   Skip speaker diarization
+    --retranscribe                 Re-transcribe all recordings
   install [folder] [--interval]  Install launchd agent (default: 30 min)
   uninstall                      Remove launchd agent`
 
@@ -252,11 +255,12 @@ export async function run(args: string[]): Promise<void> {
       return loginCommand()
     case 'sync': {
       let folder = DEFAULT_OUTPUT
-      let concurrency = 1
+      let concurrency = 3
       let audioOnly = false
       let transcribeOnly = false
       let verbose = false
       let noDiarize = false
+      let retranscribe = false
       const syncArgs = args.slice(1)
       for (let i = 0; i < syncArgs.length; i++) {
         if (syncArgs[i] === '--concurrency' && syncArgs[i + 1]) {
@@ -270,11 +274,13 @@ export async function run(args: string[]): Promise<void> {
           verbose = true
         } else if (syncArgs[i] === '--no-diarize') {
           noDiarize = true
+        } else if (syncArgs[i] === '--retranscribe') {
+          retranscribe = true
         } else {
           folder = syncArgs[i]
         }
       }
-      return syncCommand(folder, { concurrency, audioOnly, transcribeOnly, verbose, noDiarize })
+      return syncCommand(folder, { concurrency, audioOnly, transcribeOnly, verbose, noDiarize, retranscribe })
     }
     case 'install':
       return installCommand(args.slice(1))
