@@ -113,10 +113,11 @@ export class Transcriber {
         '--word-timestamps', 'True',
         '--hallucination-silence-threshold', '2',
         '--compression-ratio-threshold', '2.0',
+        '--verbose', 'True',
       ]
 
       const hfEnv = hfToken ? { HF_TOKEN: hfToken } : {}
-      await runProcess('uvx', mlxArgs, verbose, hfEnv)
+      await runProcess('uvx', mlxArgs, true, hfEnv)
 
       const baseName = path.basename(audioPath, path.extname(audioPath))
       const jsonPath = path.join(tmpDir, `${baseName}.json`)
