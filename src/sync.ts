@@ -63,6 +63,10 @@ export async function syncRecordings(
         if (dbEntry) {
           const existing = findExistingAudio(audioDir, dbEntry.baseName)
           if (existing) {
+            // Backfill transcription status if transcript exists on disk
+            if (!db.isTranscribed(rec.id) && fs.existsSync(path.join(transcriptDir, `${dbEntry.baseName}.txt`))) {
+              db.markTranscribed(rec.id)
+            }
             audioFiles.push({ rec, audioPath: existing, baseName: dbEntry.baseName })
             continue
           }
@@ -72,6 +76,10 @@ export async function syncRecordings(
         const existing = findExistingAudio(audioDir, baseName)
         if (existing) {
           db.markDownloaded(rec.id, baseName, path.extname(existing).slice(1))
+          // Backfill transcription status if transcript exists on disk
+          if (fs.existsSync(path.join(transcriptDir, `${baseName}.txt`))) {
+            db.markTranscribed(rec.id)
+          }
           audioFiles.push({ rec, audioPath: existing, baseName })
           continue
         }
