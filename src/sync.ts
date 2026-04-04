@@ -3,22 +3,7 @@ import * as path from 'path'
 import type { PlaudClient } from './client.js'
 import type { Transcriber } from './transcriber.js'
 import type { PlaudRecording } from './types.js'
-
-interface SyncManifest {
-  [recordingId: string]: { baseName: string; audioExt: string }
-}
-
-function loadManifest(outputFolder: string): SyncManifest {
-  const manifestPath = path.join(outputFolder, 'synced.json')
-  if (fs.existsSync(manifestPath)) {
-    return JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
-  }
-  return {}
-}
-
-function saveManifest(outputFolder: string, manifest: SyncManifest): void {
-  fs.writeFileSync(path.join(outputFolder, 'synced.json'), JSON.stringify(manifest, null, 2))
-}
+import { SyncDb } from './db.js'
 
 export function generateFilename(rec: PlaudRecording): string {
   const date = new Date(rec.start_time).toISOString().slice(0, 10)
@@ -55,143 +40,150 @@ export async function syncRecordings(
   fs.mkdirSync(audioDir, { recursive: true })
   fs.mkdirSync(transcriptDir, { recursive: true })
 
-  process.stdout.write('Fetching recordings...\n')
-  const recordings = await client.listRecordings()
-  const sorted = [...recordings].sort((a, b) => a.start_time - b.start_time)
-  process.stdout.write(`Found ${sorted.length} recording(s)\n`)
+  const db = new SyncDb(outputFolder)
 
-  // Phase 1: Download audio
-  const manifest = loadManifest(outputFolder)
-  let downloaded = 0
-  let downloadFailed = 0
-  const audioFiles: { rec: PlaudRecording; audioPath: string; baseName: string }[] = []
+  try {
+    process.stdout.write('Fetching recordings...\n')
+    const recordings = await client.listRecordings()
+    const sorted = [...recordings].sort((a, b) => a.start_time - b.start_time)
+    process.stdout.write(`Found ${sorted.length} recording(s)\n`)
 
-  if (!transcribeOnly) {
-    for (let i = 0; i < sorted.length; i++) {
-      const rec = sorted[i]
-      const baseName = generateFilename(rec)
+    // Phase 1: Download audio
+    let downloaded = 0
+    let downloadFailed = 0
+    const audioFiles: { rec: PlaudRecording; audioPath: string; baseName: string }[] = []
 
-      // Check manifest first (by recording ID), then fall back to filename match
-      const manifestEntry = manifest[rec.id]
-      if (manifestEntry) {
-        const existing = findExistingAudio(audioDir, manifestEntry.baseName)
+    if (!transcribeOnly) {
+      for (let i = 0; i < sorted.length; i++) {
+        const rec = sorted[i]
+        const baseName = generateFilename(rec)
+
+        // Check database first (by recording ID)
+        const dbEntry = db.findByRecordingId(rec.id)
+        if (dbEntry) {
+          const existing = findExistingAudio(audioDir, dbEntry.baseName)
+          if (existing) {
+            audioFiles.push({ rec, audioPath: existing, baseName: dbEntry.baseName })
+            continue
+          }
+        }
+
+        // Fall back to filename match on disk
+        const existing = findExistingAudio(audioDir, baseName)
         if (existing) {
-          audioFiles.push({ rec, audioPath: existing, baseName: manifestEntry.baseName })
+          db.markDownloaded(rec.id, baseName, path.extname(existing).slice(1))
+          audioFiles.push({ rec, audioPath: existing, baseName })
           continue
         }
-      }
 
-      const existing = findExistingAudio(audioDir, baseName)
-      if (existing) {
-        manifest[rec.id] = { baseName, audioExt: path.extname(existing).slice(1) }
-        audioFiles.push({ rec, audioPath: existing, baseName })
-        continue
-      }
-
-      const progress = `[${i + 1}/${sorted.length}]`
-      process.stdout.write(`${progress} Downloading ${rec.filename}...`)
-      try {
-        const audioPath = await downloadRecording(client, rec.id, audioDir, baseName)
-        const ext = path.extname(audioPath).slice(1)
-        manifest[rec.id] = { baseName, audioExt: ext }
-        audioFiles.push({ rec, audioPath, baseName })
-        downloaded++
-        process.stdout.write(' done\n')
-      } catch (err) {
-        downloadFailed++
-        process.stdout.write(' failed\n')
-        const message = err instanceof Error ? err.message : String(err)
-        process.stderr.write(`  Error: ${message}\n`)
-      }
-    }
-
-    saveManifest(outputFolder, manifest)
-
-    if (downloaded > 0) {
-      process.stdout.write(`\nDownloaded ${downloaded} recording(s)\n`)
-    }
-  } else {
-    // transcribe-only: use existing audio files on disk
-    for (const rec of sorted) {
-      const baseName = manifest[rec.id]?.baseName ?? generateFilename(rec)
-      const existing = findExistingAudio(audioDir, baseName)
-      if (existing) {
-        audioFiles.push({ rec, audioPath: existing, baseName })
-      }
-    }
-  }
-
-  if (audioOnly) {
-    process.stdout.write(`\nDone: ${downloaded} downloaded, ${downloadFailed} failed\n`)
-    return
-  }
-
-  // Phase 2: Transcribe
-  const needsTranscription = audioFiles.filter(
-    ({ baseName }) => !fs.existsSync(path.join(transcriptDir, `${baseName}.txt`)),
-  )
-
-  let transcribed = 0
-  let transcribeFailed = 0
-  const total = needsTranscription.length
-
-  if (total > 0) {
-    process.stdout.write(`\nTranscribing ${total} recording(s) (${concurrency} parallel)...\n`)
-  }
-
-  let nextIndex = 0
-  let completed = 0
-
-  async function worker(): Promise<void> {
-    while (nextIndex < total) {
-      const i = nextIndex++
-      const { rec, audioPath, baseName } = needsTranscription[i]
-      const transcriptPath = path.join(transcriptDir, `${baseName}.txt`)
-
-      const start = Date.now()
-      const timer = verbose ? null : setInterval(() => {
-        const elapsed = Math.floor((Date.now() - start) / 1000)
-        process.stdout.write(`\r  [${completed + 1}/${total}] ${rec.filename} (${elapsed}s)`)
-      }, 1000)
-      if (verbose) {
-        process.stdout.write(`  [${completed + 1}/${total}] ${rec.filename}\n`)
-      } else {
-        process.stdout.write(`  [${completed + 1}/${total}] ${rec.filename} (0s)`)
-      }
-      try {
-        await transcriber.transcribe(audioPath, transcriptPath, hfToken, verbose, noDiarize)
-        if (timer) clearInterval(timer)
-        const elapsed = Math.floor((Date.now() - start) / 1000)
-        transcribed++
-        completed++
-        if (verbose) {
-          process.stdout.write(`  [${completed}/${total}] ${rec.filename} done (${elapsed}s)\n`)
-        } else {
-          process.stdout.write(`\r  [${completed}/${total}] ${rec.filename} done (${elapsed}s)\n`)
+        const progress = `[${i + 1}/${sorted.length}]`
+        process.stdout.write(`${progress} Downloading ${rec.filename}...`)
+        try {
+          const audioPath = await downloadRecording(client, rec.id, audioDir, baseName)
+          const ext = path.extname(audioPath).slice(1)
+          db.markDownloaded(rec.id, baseName, ext)
+          audioFiles.push({ rec, audioPath, baseName })
+          downloaded++
+          process.stdout.write(' done\n')
+        } catch (err) {
+          downloadFailed++
+          process.stdout.write(' failed\n')
+          const message = err instanceof Error ? err.message : String(err)
+          process.stderr.write(`  Error: ${message}\n`)
         }
-      } catch (err) {
-        if (timer) clearInterval(timer)
-        const elapsed = Math.floor((Date.now() - start) / 1000)
-        transcribeFailed++
-        completed++
-        if (verbose) {
-          process.stdout.write(`  [${completed}/${total}] ${rec.filename} failed (${elapsed}s)\n`)
-        } else {
-          process.stdout.write(`\r  [${completed}/${total}] ${rec.filename} failed (${elapsed}s)\n`)
+      }
+
+      if (downloaded > 0) {
+        process.stdout.write(`\nDownloaded ${downloaded} recording(s)\n`)
+      }
+    } else {
+      // transcribe-only: use existing audio files on disk
+      for (const rec of sorted) {
+        const dbEntry = db.findByRecordingId(rec.id)
+        const baseName = dbEntry?.baseName ?? generateFilename(rec)
+        const existing = findExistingAudio(audioDir, baseName)
+        if (existing) {
+          audioFiles.push({ rec, audioPath: existing, baseName })
         }
-        const message = err instanceof Error ? err.message : String(err)
-        process.stderr.write(`    Error: ${message}\n`)
       }
     }
+
+    if (audioOnly) {
+      process.stdout.write(`\nDone: ${downloaded} downloaded, ${downloadFailed} failed\n`)
+      return
+    }
+
+    // Phase 2: Transcribe
+    const needsTranscription = audioFiles.filter(
+      ({ rec, baseName }) =>
+        !db.isTranscribed(rec.id) && !fs.existsSync(path.join(transcriptDir, `${baseName}.txt`)),
+    )
+
+    let transcribed = 0
+    let transcribeFailed = 0
+    const total = needsTranscription.length
+
+    if (total > 0) {
+      process.stdout.write(`\nTranscribing ${total} recording(s) (${concurrency} parallel)...\n`)
+    }
+
+    let nextIndex = 0
+    let completed = 0
+
+    async function worker(): Promise<void> {
+      while (nextIndex < total) {
+        const i = nextIndex++
+        const { rec, audioPath, baseName } = needsTranscription[i]
+        const transcriptPath = path.join(transcriptDir, `${baseName}.txt`)
+
+        const start = Date.now()
+        const timer = verbose ? null : setInterval(() => {
+          const elapsed = Math.floor((Date.now() - start) / 1000)
+          process.stdout.write(`\r  [${completed + 1}/${total}] ${rec.filename} (${elapsed}s)`)
+        }, 1000)
+        if (verbose) {
+          process.stdout.write(`  [${completed + 1}/${total}] ${rec.filename}\n`)
+        } else {
+          process.stdout.write(`  [${completed + 1}/${total}] ${rec.filename} (0s)`)
+        }
+        try {
+          await transcriber.transcribe(audioPath, transcriptPath, hfToken, verbose, noDiarize)
+          db.markTranscribed(rec.id)
+          if (timer) clearInterval(timer)
+          const elapsed = Math.floor((Date.now() - start) / 1000)
+          transcribed++
+          completed++
+          if (verbose) {
+            process.stdout.write(`  [${completed}/${total}] ${rec.filename} done (${elapsed}s)\n`)
+          } else {
+            process.stdout.write(`\r  [${completed}/${total}] ${rec.filename} done (${elapsed}s)\n`)
+          }
+        } catch (err) {
+          if (timer) clearInterval(timer)
+          const elapsed = Math.floor((Date.now() - start) / 1000)
+          transcribeFailed++
+          completed++
+          if (verbose) {
+            process.stdout.write(`  [${completed}/${total}] ${rec.filename} failed (${elapsed}s)\n`)
+          } else {
+            process.stdout.write(`\r  [${completed}/${total}] ${rec.filename} failed (${elapsed}s)\n`)
+          }
+          const message = err instanceof Error ? err.message : String(err)
+          process.stderr.write(`    Error: ${message}\n`)
+        }
+      }
+    }
+
+    const workers = Array.from({ length: Math.min(concurrency, total) }, () => worker())
+    await Promise.all(workers)
+
+    const skipped = sorted.length - downloaded - downloadFailed - needsTranscription.length + transcribed + transcribeFailed
+    process.stdout.write(
+      `\nDone: ${downloaded} downloaded, ${transcribed} transcribed, ${skipped} skipped, ${downloadFailed + transcribeFailed} failed\n`,
+    )
+  } finally {
+    db.close()
   }
-
-  const workers = Array.from({ length: Math.min(concurrency, total) }, () => worker())
-  await Promise.all(workers)
-
-  const skipped = sorted.length - downloaded - downloadFailed - needsTranscription.length + transcribed + transcribeFailed
-  process.stdout.write(
-    `\nDone: ${downloaded} downloaded, ${transcribed} transcribed, ${skipped} skipped, ${downloadFailed + transcribeFailed} failed\n`,
-  )
 }
 
 async function downloadRecording(
