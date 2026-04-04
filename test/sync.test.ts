@@ -186,10 +186,10 @@ describe('syncRecordings', () => {
     expect(transcriber.transcribe).toHaveBeenCalledTimes(1)
   })
 
-  it('sorts recordings by start_time ascending', async () => {
+  it('sorts recordings by start_time descending (newest first)', async () => {
     const recordings = [
-      makeRecording({ id: 'rec-2', filename: 'Later', start_time: 2000 }),
       makeRecording({ id: 'rec-1', filename: 'Earlier', start_time: 1000 }),
+      makeRecording({ id: 'rec-2', filename: 'Later', start_time: 2000 }),
     ]
 
     const processOrder: string[] = []
@@ -213,6 +213,6 @@ describe('syncRecordings', () => {
 
     await syncRecordings(client, transcriber, tmpDir)
 
-    expect(processOrder).toEqual(['rec-1', 'rec-2'])
+    expect(processOrder).toEqual(['rec-2', 'rec-1'])
   })
 })

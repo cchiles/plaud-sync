@@ -45,7 +45,7 @@ export async function syncRecordings(
   try {
     process.stdout.write('Fetching recordings...\n')
     const recordings = await client.listRecordings()
-    const sorted = [...recordings].sort((a, b) => a.start_time - b.start_time)
+    const sorted = [...recordings].sort((a, b) => b.start_time - a.start_time)
     process.stdout.write(`Found ${sorted.length} recording(s)\n`)
 
     // Phase 1: Download audio
