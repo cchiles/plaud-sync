@@ -110,11 +110,13 @@ export class Transcriber {
         '--language', 'en',
         '--output-format', 'json',
         '--output-dir', tmpDir,
-        '--word-timestamps', 'True',
-        '--hallucination-silence-threshold', '2',
         '--compression-ratio-threshold', '2.0',
         '--verbose', 'True',
       ]
+      if (!noDiarize && hfToken) {
+        // Word timestamps needed for accurate speaker merge, also enables hallucination silence detection
+        mlxArgs.push('--word-timestamps', 'True', '--hallucination-silence-threshold', '2')
+      }
 
       const hfEnv = hfToken ? { HF_TOKEN: hfToken } : {}
       await runProcess('uvx', mlxArgs, true, hfEnv)
