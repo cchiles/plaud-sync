@@ -4,6 +4,22 @@ import type { PlaudClient } from './client.js'
 import type { Transcriber } from './transcriber.js'
 import type { PlaudRecording } from './types.js'
 
+interface SyncManifest {
+  [recordingId: string]: { baseName: string; audioExt: string }
+}
+
+function loadManifest(outputFolder: string): SyncManifest {
+  const manifestPath = path.join(outputFolder, 'synced.json')
+  if (fs.existsSync(manifestPath)) {
+    return JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
+  }
+  return {}
+}
+
+function saveManifest(outputFolder: string, manifest: SyncManifest): void {
+  fs.writeFileSync(path.join(outputFolder, 'synced.json'), JSON.stringify(manifest, null, 2))
+}
+
 export function generateFilename(rec: PlaudRecording): string {
   const date = new Date(rec.start_time).toISOString().slice(0, 10)
   const slug = rec.filename.replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 50)
@@ -45,6 +61,7 @@ export async function syncRecordings(
   process.stdout.write(`Found ${sorted.length} recording(s)\n`)
 
   // Phase 1: Download audio
+  const manifest = loadManifest(outputFolder)
   let downloaded = 0
   let downloadFailed = 0
   const audioFiles: { rec: PlaudRecording; audioPath: string; baseName: string }[] = []
@@ -53,9 +70,20 @@ export async function syncRecordings(
     for (let i = 0; i < sorted.length; i++) {
       const rec = sorted[i]
       const baseName = generateFilename(rec)
-      const existing = findExistingAudio(audioDir, baseName)
 
+      // Check manifest first (by recording ID), then fall back to filename match
+      const manifestEntry = manifest[rec.id]
+      if (manifestEntry) {
+        const existing = findExistingAudio(audioDir, manifestEntry.baseName)
+        if (existing) {
+          audioFiles.push({ rec, audioPath: existing, baseName: manifestEntry.baseName })
+          continue
+        }
+      }
+
+      const existing = findExistingAudio(audioDir, baseName)
       if (existing) {
+        manifest[rec.id] = { baseName, audioExt: path.extname(existing).slice(1) }
         audioFiles.push({ rec, audioPath: existing, baseName })
         continue
       }
@@ -64,6 +92,8 @@ export async function syncRecordings(
       process.stdout.write(`${progress} Downloading ${rec.filename}...`)
       try {
         const audioPath = await downloadRecording(client, rec.id, audioDir, baseName)
+        const ext = path.extname(audioPath).slice(1)
+        manifest[rec.id] = { baseName, audioExt: ext }
         audioFiles.push({ rec, audioPath, baseName })
         downloaded++
         process.stdout.write(' done\n')
@@ -75,13 +105,15 @@ export async function syncRecordings(
       }
     }
 
+    saveManifest(outputFolder, manifest)
+
     if (downloaded > 0) {
       process.stdout.write(`\nDownloaded ${downloaded} recording(s)\n`)
     }
   } else {
     // transcribe-only: use existing audio files on disk
     for (const rec of sorted) {
-      const baseName = generateFilename(rec)
+      const baseName = manifest[rec.id]?.baseName ?? generateFilename(rec)
       const existing = findExistingAudio(audioDir, baseName)
       if (existing) {
         audioFiles.push({ rec, audioPath: existing, baseName })
