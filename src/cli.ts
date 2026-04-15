@@ -1,16 +1,35 @@
 import * as readline from 'readline'
-import * as os from 'os'
-import * as path from 'path'
-import * as fs from 'fs'
-import { execFileSync } from 'child_process'
+import { parseArgs } from 'util'
 import { PlaudSyncConfig } from './config.js'
 import { PlaudAuth } from './auth.js'
 import { PlaudClient } from './client.js'
 import { Transcriber, checkPrerequisites } from './transcriber.js'
 import { syncRecordings } from './sync.js'
+import type { SyncOptions } from './sync.js'
+import {
+  DEFAULT_OUTPUT,
+  LOG_DIR,
+  configHelp,
+  installHelp,
+  installLaunchAgent,
+  parseInstallCommand,
+  requireRecordingOrder,
+  renderDoctor,
+  renderStatus,
+  syncHelp,
+  uninstallLaunchAgent,
+  usage,
+} from './cli-support.js'
 import type { TokenData } from './types.js'
 
-const DEFAULT_OUTPUT = path.join(os.homedir(), 'PlaudSync')
+const DEFAULT_HEARTBEAT_MS = 60_000
+
+interface ParsedSyncCommand {
+  folder: string
+  options: SyncOptions
+  help: boolean
+  deprecatedConcurrency?: number
+}
 
 function prompt(question: string): Promise<string> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
@@ -20,6 +39,27 @@ function prompt(question: string): Promise<string> {
       resolve(answer.trim())
     })
   })
+}
+
+function parsePositiveInteger(raw: string | undefined, label: string): number | undefined {
+  if (raw == null) return undefined
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw new Error(`${label} must be a positive integer.`)
+  }
+  return parsed
+}
+
+function parseDateArg(raw: string | undefined): number | undefined {
+  if (!raw) return undefined
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    throw new Error('`--since` must be in YYYY-MM-DD format.')
+  }
+  const timestamp = Date.parse(`${raw}T00:00:00Z`)
+  if (Number.isNaN(timestamp)) {
+    throw new Error('`--since` must be a valid date.')
+  }
+  return timestamp
 }
 
 export function decodeJwtExpiry(jwt: string): { iat: number; exp: number } {
@@ -56,6 +96,64 @@ export function parseTokenFromCapture(
   }
 }
 
+function parseSyncCommand(args: string[]): ParsedSyncCommand {
+  const parsed = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      'audio-only': { type: 'boolean' },
+      'skip-transcription': { type: 'boolean' },
+      'transcribe-only': { type: 'boolean' },
+      'skip-download': { type: 'boolean' },
+      verbose: { type: 'boolean', short: 'v' },
+      'no-diarize': { type: 'boolean' },
+      diarize: { type: 'boolean' },
+      retranscribe: { type: 'boolean' },
+      'keep-audio': { type: 'boolean' },
+      limit: { type: 'string' },
+      since: { type: 'string' },
+      'max-runtime-minutes': { type: 'string' },
+      'recording-order': { type: 'string' },
+      'dry-run': { type: 'boolean' },
+      concurrency: { type: 'string' },
+      help: { type: 'boolean', short: 'h' },
+    },
+  })
+
+  const folder = parsed.positionals[0] ?? DEFAULT_OUTPUT
+  const audioOnly = Boolean(parsed.values['audio-only'] || parsed.values['skip-transcription'])
+  const transcribeOnly = Boolean(parsed.values['transcribe-only'] || parsed.values['skip-download'])
+  const explicitDiarize = parsed.values.diarize === true
+  const explicitNoDiarize = parsed.values['no-diarize'] === true
+
+  if (audioOnly && transcribeOnly) {
+    throw new Error('Choose only one of `--audio-only` and `--transcribe-only`.')
+  }
+  if (explicitDiarize && explicitNoDiarize) {
+    throw new Error('Choose only one of `--diarize` and `--no-diarize`.')
+  }
+
+  return {
+    folder,
+    help: Boolean(parsed.values.help),
+    deprecatedConcurrency: parsePositiveInteger(parsed.values.concurrency, '--concurrency'),
+    options: {
+      audioOnly,
+      transcribeOnly,
+      verbose: Boolean(parsed.values.verbose),
+      noDiarize: explicitNoDiarize ? true : explicitDiarize ? false : false,
+      retranscribe: Boolean(parsed.values.retranscribe),
+      deleteAudioAfterTranscribe: !parsed.values['keep-audio'],
+      limit: parsePositiveInteger(parsed.values.limit, '--limit'),
+      since: parseDateArg(parsed.values.since),
+      maxRuntimeMinutes: parsePositiveInteger(parsed.values['max-runtime-minutes'], '--max-runtime-minutes'),
+      recordingOrder: requireRecordingOrder(parsed.values['recording-order']),
+      dryRun: Boolean(parsed.values['dry-run']),
+      interactive: Boolean(process.stdout.isTTY),
+      heartbeatMs: DEFAULT_HEARTBEAT_MS,
+    },
+  }
+}
 
 async function loginCommand(): Promise<void> {
   const regionInput = await prompt('Region (us/eu) [us]: ')
@@ -101,17 +199,17 @@ async function loginCommand(): Promise<void> {
   }
 }
 
-interface SyncFlags {
-  concurrency: number
-  audioOnly: boolean
-  transcribeOnly: boolean
-  verbose: boolean
-  noDiarize: boolean
-  retranscribe: boolean
-  keepAudio: boolean
-}
+async function syncCommand(args: string[]): Promise<void> {
+  const parsed = parseSyncCommand(args)
+  if (parsed.help) {
+    process.stdout.write(syncHelp() + '\n')
+    return
+  }
 
-async function syncCommand(folder: string, flags: SyncFlags): Promise<void> {
+  if (parsed.deprecatedConcurrency != null) {
+    process.stderr.write('Warning: `--concurrency` is deprecated and currently ignored because sync remains sequential.\n')
+  }
+
   const config = new PlaudSyncConfig()
   const token = config.getToken()
 
@@ -121,8 +219,9 @@ async function syncCommand(folder: string, flags: SyncFlags): Promise<void> {
   }
 
   const hfToken = config.getHfToken()
-  if (!hfToken && !flags.noDiarize) {
-    process.stderr.write('No HF token found. Run `plaud-sync login` or set HF_TOKEN.\n')
+  const diarizationRequested = !parsed.options.noDiarize
+  if (!hfToken && diarizationRequested) {
+    process.stderr.write('No HF token found. Run `plaud-sync login`, set HF_TOKEN, or pass `--no-diarize`.\n')
     process.exit(1)
   }
 
@@ -139,160 +238,146 @@ async function syncCommand(folder: string, flags: SyncFlags): Promise<void> {
   const client = new PlaudClient(auth, token.region)
   const transcriber = new Transcriber()
 
-  await syncRecordings(client, transcriber, folder, {
+  const summary = await syncRecordings(client, transcriber, parsed.folder, {
+    ...parsed.options,
     hfToken,
-    concurrency: flags.concurrency,
-    audioOnly: flags.audioOnly,
-    transcribeOnly: flags.transcribeOnly,
-    verbose: flags.verbose,
-    noDiarize: flags.noDiarize,
-    retranscribe: flags.retranscribe,
-    deleteAudioAfterTranscribe: !flags.keepAudio,
+  })
+
+  const now = Date.now()
+  config.saveRunState({
+    outputFolder: parsed.folder,
+    lastRunAt: now,
+    lastSuccessAt: summary.failed === 0 && !summary.stoppedEarly ? now : undefined,
+    lastSummary: {
+      scanned: summary.scanned,
+      downloaded: summary.downloaded,
+      transcribed: summary.transcribed,
+      skipped: summary.skipped,
+      failed: summary.failed,
+      wallTimeMs: summary.wallTimeMs,
+    },
   })
 }
 
-const PLIST_LABEL = 'com.plaud-sync.agent'
-const PLIST_PATH = path.join(os.homedir(), 'Library', 'LaunchAgents', `${PLIST_LABEL}.plist`)
-const INSTALL_DIR = '/usr/local/bin'
-const BINARY_PATH = path.join(INSTALL_DIR, 'plaud-sync')
-const LOG_DIR = path.join(os.homedir(), 'Library', 'Logs', 'plaud-sync')
-
-function generatePlist(intervalMinutes: number, outputFolder: string): string {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>${PLIST_LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>${BINARY_PATH}</string>
-    <string>sync</string>
-    <string>${outputFolder}</string>
-  </array>
-  <key>StartInterval</key>
-  <integer>${intervalMinutes * 60}</integer>
-  <key>StandardOutPath</key>
-  <string>${path.join(LOG_DIR, 'stdout.log')}</string>
-  <key>StandardErrorPath</key>
-  <string>${path.join(LOG_DIR, 'stderr.log')}</string>
-  <key>RunAtLoad</key>
-  <true/>
-</dict>
-</plist>`
-}
-
 function installCommand(args: string[]): void {
-  let folder = DEFAULT_OUTPUT
-  let intervalMinutes = 30
-
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--interval' && args[i + 1]) {
-      intervalMinutes = parseInt(args[i + 1], 10)
-      i++
-    } else {
-      folder = args[i]
-    }
+  const parsed = parseInstallCommand(args)
+  if (parsed.help) {
+    process.stdout.write(installHelp() + '\n')
+    return
   }
 
-  if (isNaN(intervalMinutes) || intervalMinutes < 1) {
-    process.stderr.write('Interval must be a positive number of minutes.\n')
-    process.exit(1)
+  if (parsed.intervalMinutes < 1) {
+    throw new Error('Interval must be a positive number of minutes.')
+  }
+  if (parsed.intervalMinutes < 60) {
+    process.stderr.write('Warning: intervals under 60 minutes may keep the machine busy continuously for same-quality transcription workloads.\n')
   }
 
-  fs.mkdirSync(LOG_DIR, { recursive: true })
-  fs.mkdirSync(path.dirname(PLIST_PATH), { recursive: true })
-
-  const plist = generatePlist(intervalMinutes, folder)
-  fs.writeFileSync(PLIST_PATH, plist)
-
-  try {
-    execFileSync('launchctl', ['unload', PLIST_PATH], { stdio: 'ignore' })
-  } catch {
-    // Ignore if not loaded
+  const syncArgs = ['sync', parsed.folder, '--recording-order', parsed.recordingOrder]
+  if (parsed.maxRuntimeMinutes) {
+    syncArgs.push('--max-runtime-minutes', String(parsed.maxRuntimeMinutes))
   }
-  execFileSync('launchctl', ['load', PLIST_PATH])
+  if (parsed.noDiarize) {
+    syncArgs.push('--no-diarize')
+  }
 
-  process.stdout.write(`Installed. Syncing every ${intervalMinutes} minutes to ${folder}\n`)
+  installLaunchAgent({
+    intervalMinutes: parsed.intervalMinutes,
+    syncArgs,
+    runAtLoad: parsed.runAtLoad,
+  })
+
+  const config = new PlaudSyncConfig()
+  config.setOutputFolder(parsed.folder)
+
+  process.stdout.write(`Installed. Syncing every ${parsed.intervalMinutes} minutes to ${parsed.folder}\n`)
+  process.stdout.write(`Flags: ${syncArgs.slice(2).join(' ') || 'none'}\n`)
   process.stdout.write(`Logs: ${LOG_DIR}\n`)
 }
 
 function uninstallCommand(): void {
-  if (!fs.existsSync(PLIST_PATH)) {
-    process.stdout.write('LaunchAgent not installed.\n')
-    return
-  }
-
-  try {
-    execFileSync('launchctl', ['unload', PLIST_PATH])
-  } catch {
-    // Ignore if not loaded
-  }
-
-  fs.unlinkSync(PLIST_PATH)
-  process.stdout.write('LaunchAgent uninstalled.\n')
+  uninstallLaunchAgent()
 }
 
-const USAGE = `plaud-sync v0.2.10
+function statusCommand(args: string[]): void {
+  renderStatus(args)
+}
 
-Usage: plaud-sync <command> [options]
+function doctorCommand(args: string[]): void {
+  renderDoctor(args)
+}
 
-Commands:
-  login                          Authenticate via Plaud web app
-  sync [folder] [options]          Sync recordings (default: ~/PlaudSync)
-    --audio-only                   Download audio only, skip transcription
-    --transcribe-only              Transcribe existing audio only, skip download
-    --concurrency N                Parallel transcriptions (default: 3)
-    --verbose                      Show transcription output
-    --no-diarize                   Skip speaker diarization
-    --retranscribe                 Re-transcribe all recordings
-    --keep-audio                   Keep downloaded audio after successful transcription
-  install [folder] [--interval]  Install launchd agent (default: 30 min)
-  uninstall                      Remove launchd agent`
+function configCommand(args: string[]): void {
+  const subcommand = args[0]
+  const config = new PlaudSyncConfig()
+
+  switch (subcommand) {
+    case 'path':
+      process.stdout.write(config.filePath() + '\n')
+      return
+    case 'show': {
+      const payload = {
+        configPath: config.filePath(),
+        tokenConfigured: Boolean(config.getToken()),
+        tokenExpiry: config.getToken()?.expiresAt ?? null,
+        hfTokenConfigured: Boolean(config.getHfToken()),
+        outputFolder: config.getOutputFolder() ?? DEFAULT_OUTPUT,
+        state: config.getState() ?? null,
+      }
+      process.stdout.write(JSON.stringify(payload, null, 2) + '\n')
+      return
+    }
+    case 'set':
+      if (args[1] === 'hf-token') {
+        const value = args[2]
+        if (!value) {
+          throw new Error('Usage: plaud-sync config set hf-token <token>')
+        }
+        config.saveHfToken(value)
+        process.stdout.write('HF token saved.\n')
+        return
+      }
+      throw new Error(configHelp())
+    default:
+      process.stdout.write(configHelp() + '\n')
+  }
+}
 
 export async function run(args: string[]): Promise<void> {
   const command = args[0]
 
-  switch (command) {
-    case 'login':
-      return loginCommand()
-    case 'sync': {
-      let folder = DEFAULT_OUTPUT
-      let concurrency = 3
-      let audioOnly = false
-      let transcribeOnly = false
-      let verbose = false
-      let noDiarize = false
-      let retranscribe = false
-      let keepAudio = false
-      const syncArgs = args.slice(1)
-      for (let i = 0; i < syncArgs.length; i++) {
-        if (syncArgs[i] === '--concurrency' && syncArgs[i + 1]) {
-          concurrency = parseInt(syncArgs[i + 1], 10)
-          i++
-        } else if (syncArgs[i] === '--audio-only') {
-          audioOnly = true
-        } else if (syncArgs[i] === '--transcribe-only') {
-          transcribeOnly = true
-        } else if (syncArgs[i] === '--verbose' || syncArgs[i] === '-v') {
-          verbose = true
-        } else if (syncArgs[i] === '--no-diarize') {
-          noDiarize = true
-        } else if (syncArgs[i] === '--retranscribe') {
-          retranscribe = true
-        } else if (syncArgs[i] === '--keep-audio') {
-          keepAudio = true
-        } else {
-          folder = syncArgs[i]
-        }
-      }
-      return syncCommand(folder, { concurrency, audioOnly, transcribeOnly, verbose, noDiarize, retranscribe, keepAudio })
+  try {
+    switch (command) {
+      case 'login':
+        return loginCommand()
+      case 'sync':
+        return syncCommand(args.slice(1))
+      case 'install':
+        return installCommand(args.slice(1))
+      case 'uninstall':
+        return uninstallCommand()
+      case 'status':
+        return statusCommand(args.slice(1))
+      case 'doctor':
+        return doctorCommand(args.slice(1))
+      case 'config':
+        return configCommand(args.slice(1))
+      case 'help':
+      case '--help':
+      case '-h':
+      case undefined:
+        process.stdout.write(usage() + '\n')
+        return
+      default:
+        throw new Error(`Unknown command: ${command}\n\n${usage()}`)
     }
-    case 'install':
-      return installCommand(args.slice(1))
-    case 'uninstall':
-      return uninstallCommand()
-    default:
-      process.stdout.write(USAGE + '\n')
+  } catch (err) {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`)
+    process.exit(1)
   }
+}
+
+export {
+  parseInstallCommand,
+  parseSyncCommand,
 }

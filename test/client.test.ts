@@ -18,7 +18,7 @@ describe('PlaudClient', () => {
       const auth = makeAuth()
       const client = new PlaudClient(auth, 'us')
 
-      spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
+      spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
         new Response(JSON.stringify({
           data_file_list: [
             { id: '1', filename: 'meeting', is_trash: false },
@@ -26,7 +26,7 @@ describe('PlaudClient', () => {
             { id: '3', filename: 'notes', is_trash: false },
           ],
         })),
-      ))
+      )) as unknown as typeof fetch)
 
       const recordings = await client.listRecordings()
       expect(recordings).toHaveLength(2)
@@ -38,9 +38,9 @@ describe('PlaudClient', () => {
       const auth = makeAuth()
       const client = new PlaudClient(auth, 'us')
 
-      const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
+      const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
         new Response(JSON.stringify({ data_file_list: [] })),
-      ))
+      )) as unknown as typeof fetch)
 
       await client.listRecordings()
 
@@ -59,17 +59,17 @@ describe('PlaudClient', () => {
       const client = new PlaudClient(auth, 'us')
 
       const fetchSpy = spyOn(globalThis, 'fetch')
-        .mockImplementationOnce(() => Promise.resolve(
+        .mockImplementationOnce((() => Promise.resolve(
           new Response(JSON.stringify({
             status: -302,
             data: { domains: { api: 'api-euc1.plaud.ai' } },
           })),
-        ))
-        .mockImplementationOnce(() => Promise.resolve(
+        )) as unknown as typeof fetch)
+        .mockImplementationOnce((() => Promise.resolve(
           new Response(JSON.stringify({
             data_file_list: [{ id: '1', filename: 'test', is_trash: false }],
           })),
-        ))
+        )) as unknown as typeof fetch)
 
       const recordings = await client.listRecordings()
       expect(recordings).toHaveLength(1)
@@ -83,9 +83,9 @@ describe('PlaudClient', () => {
       const auth = makeAuth()
       const client = new PlaudClient(auth, 'us')
 
-      spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
+      spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
         new Response(JSON.stringify({ url: 'https://cdn.example.com/file.mp3' })),
-      ))
+      )) as unknown as typeof fetch)
 
       const url = await client.getMp3Url('rec-123')
       expect(url).toBe('https://cdn.example.com/file.mp3')
@@ -95,7 +95,7 @@ describe('PlaudClient', () => {
       const auth = makeAuth()
       const client = new PlaudClient(auth, 'us')
 
-      spyOn(globalThis, 'fetch').mockImplementation(() => Promise.reject(new Error('Network error')))
+      spyOn(globalThis, 'fetch').mockImplementation((() => Promise.reject(new Error('Network error'))) as unknown as typeof fetch)
 
       const url = await client.getMp3Url('rec-123')
       expect(url).toBeNull()
@@ -108,9 +108,9 @@ describe('PlaudClient', () => {
       const client = new PlaudClient(auth, 'us')
 
       const audioData = new ArrayBuffer(16)
-      spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
+      spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
         new Response(audioData, { status: 200 }),
-      ))
+      )) as unknown as typeof fetch)
 
       const result = await client.downloadAudio('rec-123')
       expect(result.byteLength).toBe(16)
@@ -120,9 +120,9 @@ describe('PlaudClient', () => {
       const auth = makeAuth()
       const client = new PlaudClient(auth, 'us')
 
-      spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
+      spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
         new Response(null, { status: 404, statusText: 'Not Found' }),
-      ))
+      )) as unknown as typeof fetch)
 
       await expect(client.downloadAudio('rec-123')).rejects.toThrow('Download failed: 404')
     })

@@ -70,11 +70,11 @@ describe('syncRecordings', () => {
     } as unknown as Transcriber
 
     // Mock fetch for MP3 download
-    spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
+    spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
       new Response(new ArrayBuffer(16), { status: 200 }),
-    ))
+    )) as unknown as typeof fetch)
 
-    await syncRecordings(client, transcriber, tmpDir)
+    const summary = await syncRecordings(client, transcriber, tmpDir)
 
     const audioDir = path.join(tmpDir, 'audio')
     const transcriptDir = path.join(tmpDir, 'transcripts')
@@ -83,6 +83,8 @@ describe('syncRecordings', () => {
     expect(client.getMp3Url).toHaveBeenCalledWith('rec-1')
     expect(transcriber.transcribe).toHaveBeenCalled()
     expect(fs.readdirSync(audioDir)).toEqual([])
+    expect(summary.downloaded).toBe(1)
+    expect(summary.transcribed).toBe(1)
   })
 
   it('skips recordings that already have audio files', async () => {
@@ -171,9 +173,9 @@ describe('syncRecordings', () => {
       transcribe: mock(() => Promise.resolve(undefined)),
     } as unknown as Transcriber
 
-    spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
+    spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
       new Response(new ArrayBuffer(16), { status: 200 }),
-    ))
+    )) as unknown as typeof fetch)
 
     await syncRecordings(client, transcriber, tmpDir, { deleteAudioAfterTranscribe: false })
 
@@ -200,9 +202,9 @@ describe('syncRecordings', () => {
       transcribe: mock(() => Promise.resolve(undefined)),
     } as unknown as Transcriber
 
-    spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
+    spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
       new Response(new ArrayBuffer(16), { status: 200 }),
-    ))
+    )) as unknown as typeof fetch)
 
     await syncRecordings(client, transcriber, tmpDir)
 
@@ -231,9 +233,9 @@ describe('syncRecordings', () => {
       transcribe: mock(() => Promise.resolve(undefined)),
     } as unknown as Transcriber
 
-    spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
+    spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
       new Response(new ArrayBuffer(16), { status: 200 }),
-    ))
+    )) as unknown as typeof fetch)
 
     await syncRecordings(client, transcriber, tmpDir)
 
@@ -264,9 +266,9 @@ describe('syncRecordings', () => {
       }),
     } as unknown as Transcriber
 
-    spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
+    spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
       new Response(new ArrayBuffer(16), { status: 200 }),
-    ))
+    )) as unknown as typeof fetch)
 
     await syncRecordings(client, transcriber, tmpDir)
 
@@ -276,5 +278,57 @@ describe('syncRecordings', () => {
       'download:rec-1',
       'transcribe:1970-01-01_First',
     ])
+  })
+
+  it('filters recordings by since date and limit', async () => {
+    const recordings = [
+      makeRecording({ id: 'rec-1', filename: 'Older', start_time: Date.parse('2026-03-01T10:00:00Z') }),
+      makeRecording({ id: 'rec-2', filename: 'Mid', start_time: Date.parse('2026-04-02T10:00:00Z') }),
+      makeRecording({ id: 'rec-3', filename: 'Newest', start_time: Date.parse('2026-04-03T10:00:00Z') }),
+    ]
+
+    const processOrder: string[] = []
+    const client: PlaudClient = {
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock((id: string) => {
+        processOrder.push(id)
+        return Promise.resolve('https://cdn.example.com/file.mp3')
+      }),
+      downloadAudio: mock(() => undefined),
+    } as unknown as PlaudClient
+    const transcriber: Transcriber = {
+      transcribe: mock(() => Promise.resolve(undefined)),
+    } as unknown as Transcriber
+
+    spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
+      new Response(new ArrayBuffer(16), { status: 200 }),
+    )) as unknown as typeof fetch)
+
+    const summary = await syncRecordings(client, transcriber, tmpDir, {
+      since: Date.parse('2026-04-01T00:00:00Z'),
+      limit: 1,
+    })
+
+    expect(processOrder).toEqual(['rec-3'])
+    expect(summary.scanned).toBe(3)
+    expect(summary.selected).toBe(1)
+  })
+
+  it('supports dry-run without downloading or transcribing', async () => {
+    const recordings = [makeRecording()]
+    const client: PlaudClient = {
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock(() => Promise.resolve('https://cdn.example.com/file.mp3')),
+      downloadAudio: mock(() => undefined),
+    } as unknown as PlaudClient
+    const transcriber: Transcriber = {
+      transcribe: mock(() => Promise.resolve(undefined)),
+    } as unknown as Transcriber
+
+    const summary = await syncRecordings(client, transcriber, tmpDir, { dryRun: true })
+
+    expect(client.getMp3Url).not.toHaveBeenCalled()
+    expect(transcriber.transcribe).not.toHaveBeenCalled()
+    expect(summary.selected).toBe(1)
   })
 })

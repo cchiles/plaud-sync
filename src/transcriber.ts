@@ -53,6 +53,16 @@ interface MergedSegment {
   speaker: string
 }
 
+export type TranscriptionPhase =
+  | 'transcribing'
+  | 'diarizing'
+  | 'writing transcript'
+
+export interface TranscribeHooks {
+  onPhaseChange?: (phase: TranscriptionPhase) => void
+  onTiming?: (timing: { transcriptionMs: number; diarizationMs: number; writeMs: number }) => void
+}
+
 function runProcess(cmd: string, args: string[], verbose: boolean, env?: Record<string, string>): Promise<string> {
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args, {
@@ -98,10 +108,17 @@ export class Transcriber {
     hfToken?: string,
     verbose = false,
     noDiarize = false,
+    hooks: TranscribeHooks = {},
   ): Promise<void> {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plaud-sync-'))
+    const phaseTimings = {
+      transcriptionMs: 0,
+      diarizationMs: 0,
+      writeMs: 0,
+    }
 
     try {
+      hooks.onPhaseChange?.('transcribing')
       // Phase 1: Transcribe with mlx-whisper
       const mlxArgs = [
         '--python', '3.12', '--from', 'mlx-whisper', 'mlx_whisper',
@@ -118,8 +135,10 @@ export class Transcriber {
         mlxArgs.push('--word-timestamps', 'True', '--hallucination-silence-threshold', '2')
       }
 
-      const hfEnv = hfToken ? { HF_TOKEN: hfToken } : {}
+      const hfEnv = hfToken ? { HF_TOKEN: hfToken } : undefined
+      const transcriptionStartedAt = Date.now()
       await runProcess('uvx', mlxArgs, true, hfEnv)
+      phaseTimings.transcriptionMs = Date.now() - transcriptionStartedAt
 
       const baseName = path.basename(audioPath, path.extname(audioPath))
       const jsonPath = path.join(tmpDir, `${baseName}.json`)
@@ -131,7 +150,11 @@ export class Transcriber {
         const lines = data.segments
           .map((seg) => seg.text.trim())
           .filter(Boolean)
+        hooks.onPhaseChange?.('writing transcript')
+        const writeStartedAt = Date.now()
         fs.writeFileSync(outputPath, lines.join('\n') + '\n')
+        phaseTimings.writeMs = Date.now() - writeStartedAt
+        hooks.onTiming?.(phaseTimings)
         return
       }
 
@@ -146,13 +169,20 @@ export class Transcriber {
         'python', diarizeScript, audioPath, hfToken,
       ]
 
+      hooks.onPhaseChange?.('diarizing')
+      const diarizationStartedAt = Date.now()
       const diarizeJson = await runProcess('uv', diarizeArgs, verbose, hfEnv)
+      phaseTimings.diarizationMs = Date.now() - diarizationStartedAt
       const diarization = JSON.parse(diarizeJson) as DiarizeSegment[]
 
       // Merge and format
       const merged = assignSpeakers(data.segments, diarization)
       const formatted = formatTranscript(merged)
+      hooks.onPhaseChange?.('writing transcript')
+      const writeStartedAt = Date.now()
       fs.writeFileSync(outputPath, formatted)
+      phaseTimings.writeMs = Date.now() - writeStartedAt
+      hooks.onTiming?.(phaseTimings)
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true })
     }

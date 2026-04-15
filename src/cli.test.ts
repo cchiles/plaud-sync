@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { parseTokenFromCapture, decodeJwtExpiry } from './cli.js'
+import { parseTokenFromCapture, decodeJwtExpiry, parseSyncCommand } from './cli.js'
+import { parseInstallCommand, generatePlist } from './cli-support.js'
 
 describe('decodeJwtExpiry', () => {
   test('decodes iat and exp from a JWT', () => {
@@ -73,5 +74,73 @@ describe('parseTokenFromCapture', () => {
 
   test('throws on malformed JWT', () => {
     expect(() => parseTokenFromCapture({ token: 'not-a-jwt', domain: null })).toThrow('Invalid JWT')
+  })
+})
+
+describe('parseSyncCommand', () => {
+  test('parses new sync filters and flags', () => {
+    const parsed = parseSyncCommand([
+      '/tmp/output',
+      '--limit', '3',
+      '--since', '2026-04-01',
+      '--max-runtime-minutes', '20',
+      '--recording-order', 'oldest',
+      '--dry-run',
+      '--keep-audio',
+    ])
+
+    expect(parsed.folder).toBe('/tmp/output')
+    expect(parsed.options.limit).toBe(3)
+    expect(parsed.options.since).toBe(Date.parse('2026-04-01T00:00:00Z'))
+    expect(parsed.options.maxRuntimeMinutes).toBe(20)
+    expect(parsed.options.recordingOrder).toBe('oldest')
+    expect(parsed.options.dryRun).toBe(true)
+    expect(parsed.options.deleteAudioAfterTranscribe).toBe(false)
+  })
+
+  test('keeps deprecated concurrency for warning purposes', () => {
+    const parsed = parseSyncCommand(['--concurrency', '2'])
+    expect(parsed.deprecatedConcurrency).toBe(2)
+  })
+
+  test('rejects invalid recording order values', () => {
+    expect(() => parseSyncCommand(['--recording-order', 'latest'])).toThrow(
+      '`--recording-order` must be `newest` or `oldest`.',
+    )
+  })
+})
+
+describe('parseInstallCommand', () => {
+  test('parses launch agent options', () => {
+    const parsed = parseInstallCommand([
+      '/tmp/output',
+      '--interval', '120',
+      '--max-runtime-minutes', '30',
+      '--recording-order', 'oldest',
+      '--run-at-load', 'false',
+      '--no-diarize',
+    ])
+
+    expect(parsed.folder).toBe('/tmp/output')
+    expect(parsed.intervalMinutes).toBe(120)
+    expect(parsed.maxRuntimeMinutes).toBe(30)
+    expect(parsed.recordingOrder).toBe('oldest')
+    expect(parsed.runAtLoad).toBe(false)
+    expect(parsed.noDiarize).toBe(true)
+  })
+})
+
+describe('generatePlist', () => {
+  test('includes sync flags in program arguments', () => {
+    const plist = generatePlist({
+      intervalMinutes: 60,
+      syncArgs: ['sync', '/tmp/output', '--recording-order', 'oldest', '--max-runtime-minutes', '20'],
+      runAtLoad: true,
+    })
+
+    expect(plist).toContain('<string>sync</string>')
+    expect(plist).toContain('<string>--recording-order</string>')
+    expect(plist).toContain('<string>oldest</string>')
+    expect(plist).toContain('<true/>')
   })
 })

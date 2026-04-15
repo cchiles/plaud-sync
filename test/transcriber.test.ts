@@ -22,7 +22,7 @@ describe('Transcriber', () => {
     ]
 
     let callCount = 0
-    const spy = spyOn(child_process, 'spawn').mockImplementation((_cmd: string, args: string[]) => {
+    const spy = spyOn(child_process, 'spawn').mockImplementation(((_cmd: string, args: string[]) => {
       const emitter = new EventEmitter() as any
       emitter.stdout = new EventEmitter()
       emitter.stderr = new EventEmitter()
@@ -46,7 +46,7 @@ describe('Transcriber', () => {
       }
 
       return emitter
-    })
+    }) as any)
 
     const outputPath = path.join(os.tmpdir(), `plaud-test-${Date.now()}.txt`)
 
@@ -84,7 +84,7 @@ describe('Transcriber', () => {
       ],
     }
 
-    const spy = spyOn(child_process, 'spawn').mockImplementation((_cmd: string, args: string[]) => {
+    const spy = spyOn(child_process, 'spawn').mockImplementation(((_cmd: string, args: string[]) => {
       const emitter = new EventEmitter() as any
       emitter.stdout = new EventEmitter()
       emitter.stderr = new EventEmitter()
@@ -98,7 +98,7 @@ describe('Transcriber', () => {
       setTimeout(() => emitter.emit('close', 0), 0)
 
       return emitter
-    })
+    }) as any)
 
     const outputPath = path.join(os.tmpdir(), `plaud-test-${Date.now()}.txt`)
 
@@ -121,10 +121,10 @@ describe('Transcriber', () => {
     const emitter = new EventEmitter() as any
     emitter.stdout = new EventEmitter()
     emitter.stderr = new EventEmitter()
-    const spy = spyOn(child_process, 'spawn').mockImplementation(() => {
+    const spy = spyOn(child_process, 'spawn').mockImplementation((() => {
       setTimeout(() => emitter.emit('close', 1), 0)
       return emitter
-    })
+    }) as any)
 
     try {
       const transcriber = new Transcriber()

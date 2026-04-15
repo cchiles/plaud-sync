@@ -59,4 +59,27 @@ describe('PlaudSyncConfig', () => {
     const stats = fs.statSync(filePath)
     expect(stats.mode & 0o777).toBe(0o600)
   })
+
+  it('migrates from a legacy config directory into the canonical directory', () => {
+    const canonicalDir = path.join(tmpDir, 'app-support')
+    const legacyDir = path.join(tmpDir, 'legacy')
+    fs.mkdirSync(legacyDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(legacyDir, 'config.json'),
+      JSON.stringify({
+        token: {
+          accessToken: 'legacy-token',
+          tokenType: 'Bearer',
+          issuedAt: 1000,
+          expiresAt: 2000,
+          region: 'us',
+        },
+      }),
+    )
+
+    config = new PlaudSyncConfig(canonicalDir, legacyDir)
+
+    expect(config.getToken()?.accessToken).toBe('legacy-token')
+    expect(fs.existsSync(path.join(canonicalDir, 'config.json'))).toBe(true)
+  })
 })

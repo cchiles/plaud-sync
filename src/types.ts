@@ -26,6 +26,19 @@ export type TokenData = z.infer<typeof TokenDataSchema>
 export const ConfigSchema = z.object({
   token: TokenDataSchema.optional(),
   hfToken: z.string().optional(),
+  state: z.object({
+    outputFolder: z.string().optional(),
+    lastRunAt: z.number().optional(),
+    lastSuccessAt: z.number().optional(),
+    lastSummary: z.object({
+      scanned: z.number(),
+      downloaded: z.number(),
+      transcribed: z.number(),
+      skipped: z.number(),
+      failed: z.number(),
+      wallTimeMs: z.number(),
+    }).optional(),
+  }).optional(),
 })
 
 export type Config = z.infer<typeof ConfigSchema>

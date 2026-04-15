@@ -5,6 +5,47 @@ import type { Transcriber } from './transcriber.js'
 import type { PlaudRecording } from './types.js'
 import { SyncDb } from './db.js'
 
+export type RecordingOrder = 'newest' | 'oldest'
+
+export interface SyncOptions {
+  hfToken?: string
+  audioOnly?: boolean
+  transcribeOnly?: boolean
+  verbose?: boolean
+  noDiarize?: boolean
+  retranscribe?: boolean
+  deleteAudioAfterTranscribe?: boolean
+  limit?: number
+  since?: number
+  maxRuntimeMinutes?: number
+  recordingOrder?: RecordingOrder
+  dryRun?: boolean
+  interactive?: boolean
+  heartbeatMs?: number
+}
+
+export interface SyncRunSummary {
+  scanned: number
+  selected: number
+  downloaded: number
+  transcribed: number
+  skipped: number
+  failed: number
+  wallTimeMs: number
+  stoppedEarly: boolean
+}
+
+type SyncPhase =
+  | 'queued'
+  | 'downloading'
+  | 'downloaded'
+  | 'transcribing'
+  | 'diarizing'
+  | 'writing transcript'
+  | 'done'
+  | 'failed'
+  | 'skipped'
+
 export function generateFilename(rec: PlaudRecording): string {
   const date = new Date(rec.start_time).toISOString().slice(0, 10)
   const slug = rec.filename.replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 50)
@@ -19,15 +60,207 @@ function findExistingAudio(audioDir: string, baseName: string): string | null {
   return null
 }
 
-export interface SyncOptions {
-  hfToken?: string
-  concurrency?: number
-  audioOnly?: boolean
-  transcribeOnly?: boolean
-  verbose?: boolean
-  noDiarize?: boolean
-  retranscribe?: boolean
-  deleteAudioAfterTranscribe?: boolean
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
+}
+
+function formatDateOnly(timestamp: number): string {
+  return new Date(timestamp).toISOString().slice(0, 10)
+}
+
+function parseResultLabel(args: {
+  downloaded: boolean
+  transcribed: boolean
+  hadExistingAudio: boolean
+}): string {
+  if (args.downloaded && args.transcribed) return 'downloaded + transcribed'
+  if (args.transcribed && args.hadExistingAudio) return 'transcribed from existing audio'
+  if (args.downloaded) return 'downloaded'
+  return 'done'
+}
+
+class ProgressReporter {
+  private readonly interactive: boolean
+  private readonly verbose: boolean
+  private readonly heartbeatMs: number
+  private readonly runStartedAt = Date.now()
+  private footerTimer?: ReturnType<typeof setInterval>
+  private heartbeatTimer?: ReturnType<typeof setInterval>
+  private current:
+    | {
+        index: number
+        total: number
+        name: string
+        phase: SyncPhase
+        startedAt: number
+      }
+    | undefined
+
+  private completed = 0
+  private skipped = 0
+  private failed = 0
+
+  constructor(options: { interactive: boolean; verbose: boolean; heartbeatMs: number }) {
+    this.interactive = options.interactive
+    this.verbose = options.verbose
+    this.heartbeatMs = options.heartbeatMs
+  }
+
+  startHeader(meta: {
+    outputFolder: string
+    totalFetched: number
+    selected: number
+    limit?: number
+    since?: number
+    diarizationEnabled: boolean
+    keepAudio: boolean
+    maxRuntimeMinutes?: number
+    recordingOrder: RecordingOrder
+    dryRun: boolean
+  }): void {
+    this.line('Starting sync')
+    this.line(`  Output: ${meta.outputFolder}`)
+    this.line(`  Fetched: ${meta.totalFetched} recording(s)`)
+    this.line(`  Selected: ${meta.selected} recording(s)`)
+    this.line(
+      `  Filters: order=${meta.recordingOrder}, since=${meta.since ? formatDateOnly(meta.since) : 'none'}, limit=${meta.limit ?? 'none'}`,
+    )
+    this.line(
+      `  Options: diarization=${meta.diarizationEnabled ? 'on' : 'off'}, keep-audio=${meta.keepAudio ? 'on' : 'off'}, dry-run=${meta.dryRun ? 'on' : 'off'}, runtime-cap=${meta.maxRuntimeMinutes ? `${meta.maxRuntimeMinutes}m` : 'none'}`,
+    )
+
+    this.startLiveUpdates()
+  }
+
+  queue(index: number, total: number, name: string): void {
+    this.current = {
+      index,
+      total,
+      name,
+      phase: 'queued',
+      startedAt: Date.now(),
+    }
+    if (this.verbose) this.line(`[${index}/${total}] ${name} queued`)
+  }
+
+  phase(phase: SyncPhase): void {
+    if (!this.current) return
+    this.current.phase = phase
+    if (this.verbose) {
+      this.line(`[${this.current.index}/${this.current.total}] ${this.current.name} ${phase}`)
+    }
+  }
+
+  result(result: {
+    label: string
+    durationMs: number
+    skipped?: boolean
+    failed?: boolean
+    timings?: { transcriptionMs: number; diarizationMs: number; writeMs: number }
+  }): void {
+    if (!this.current) return
+
+    if (result.failed) this.failed += 1
+    else if (result.skipped) this.skipped += 1
+    else this.completed += 1
+
+    const detailParts = [`elapsed=${formatDuration(result.durationMs)}`]
+    if (this.verbose && result.timings) {
+      detailParts.push(`transcribe=${formatDuration(result.timings.transcriptionMs)}`)
+      if (result.timings.diarizationMs > 0) {
+        detailParts.push(`diarize=${formatDuration(result.timings.diarizationMs)}`)
+      }
+      detailParts.push(`write=${formatDuration(result.timings.writeMs)}`)
+    }
+
+    this.line(
+      `[${this.current.index}/${this.current.total}] ${this.current.name} ${result.label} (${detailParts.join(', ')})`,
+    )
+    this.current = undefined
+  }
+
+  heartbeat(): void {
+    if (!this.current) return
+    const remaining = Math.max(0, this.current.total - (this.completed + this.skipped + this.failed))
+    this.line(
+      `Heartbeat: completed=${this.completed}, skipped=${this.skipped}, failed=${this.failed}, remaining=${remaining}, current="${this.current.name}" (${this.current.phase}), elapsed=${formatDuration(Date.now() - this.runStartedAt)}`,
+    )
+  }
+
+  noteStoppedEarly(reason: string): void {
+    this.line(reason)
+  }
+
+  finish(summary: SyncRunSummary): void {
+    this.stopLiveUpdates()
+    this.line(
+      `Done: scanned=${summary.scanned}, selected=${summary.selected}, downloaded=${summary.downloaded}, transcribed=${summary.transcribed}, skipped=${summary.skipped}, failed=${summary.failed}, wall=${formatDuration(summary.wallTimeMs)}${summary.stoppedEarly ? ', stopped-early=yes' : ''}`,
+    )
+  }
+
+  private startLiveUpdates(): void {
+    if (!this.interactive || this.verbose) {
+      this.heartbeatTimer = setInterval(() => this.heartbeat(), this.heartbeatMs)
+      return
+    }
+
+    this.footerTimer = setInterval(() => this.renderFooter(), 1000)
+    this.heartbeatTimer = setInterval(() => this.heartbeat(), this.heartbeatMs)
+  }
+
+  private stopLiveUpdates(): void {
+    if (this.footerTimer) clearInterval(this.footerTimer)
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+    if (this.interactive && !this.verbose) {
+      process.stdout.write('\r\x1b[2K')
+    }
+  }
+
+  private renderFooter(): void {
+    if (!this.interactive || this.verbose || !this.current) return
+    const elapsed = formatDuration(Date.now() - this.current.startedAt)
+    const footer =
+      `Current ${this.current.index}/${this.current.total}: ${this.current.name} ` +
+      `[${this.current.phase}] elapsed=${elapsed} completed=${this.completed} skipped=${this.skipped} failed=${this.failed}`
+    process.stdout.write(`\r\x1b[2K${footer}`)
+  }
+
+  private line(message: string): void {
+    if (this.interactive && !this.verbose) {
+      process.stdout.write('\r\x1b[2K')
+    }
+    process.stdout.write(`${message}\n`)
+    if (this.interactive && !this.verbose && this.current) {
+      this.renderFooter()
+    }
+  }
+}
+
+function selectRecordings(
+  recordings: PlaudRecording[],
+  options: Pick<SyncOptions, 'recordingOrder' | 'since' | 'limit'>,
+): PlaudRecording[] {
+  const order = options.recordingOrder ?? 'newest'
+  const since = options.since
+  let selected = [...recordings]
+
+  if (since) {
+    selected = selected.filter((recording) => recording.start_time >= since)
+  }
+
+  selected.sort((a, b) => {
+    const direction = order === 'oldest' ? 1 : -1
+    return direction * (a.start_time - b.start_time)
+  })
+
+  if (options.limit) {
+    selected = selected.slice(0, options.limit)
+  }
+
+  return selected
 }
 
 export async function syncRecordings(
@@ -35,16 +268,22 @@ export async function syncRecordings(
   transcriber: Transcriber,
   outputFolder: string,
   options: SyncOptions = {},
-): Promise<void> {
+): Promise<SyncRunSummary> {
   const {
     hfToken,
-    concurrency = 1,
     audioOnly = false,
     transcribeOnly = false,
     verbose = false,
     noDiarize = false,
     retranscribe = false,
     deleteAudioAfterTranscribe = true,
+    limit,
+    since,
+    maxRuntimeMinutes,
+    recordingOrder = 'newest',
+    dryRun = false,
+    interactive = Boolean(process.stdout.isTTY),
+    heartbeatMs = 60_000,
   } = options
   const audioDir = path.join(outputFolder, 'audio')
   const transcriptDir = path.join(outputFolder, 'transcripts')
@@ -52,24 +291,45 @@ export async function syncRecordings(
   fs.mkdirSync(transcriptDir, { recursive: true })
 
   const db = new SyncDb(outputFolder)
+  const reporter = new ProgressReporter({ interactive, verbose, heartbeatMs })
+  const runStartedAt = Date.now()
+  const deadline = maxRuntimeMinutes ? runStartedAt + maxRuntimeMinutes * 60_000 : null
+  const diarizationEnabled = !noDiarize && Boolean(hfToken)
+
+  let downloaded = 0
+  let transcribed = 0
+  let skipped = 0
+  let failed = 0
+  let stoppedEarly = false
 
   try {
-    process.stdout.write('Fetching recordings...\n')
     const recordings = await client.listRecordings()
-    const sorted = [...recordings].sort((a, b) => b.start_time - a.start_time)
-    process.stdout.write(`Found ${sorted.length} recording(s)\n`)
+    const selected = selectRecordings(recordings, { recordingOrder, since, limit })
 
-    let downloaded = 0
-    let transcribed = 0
-    let skipped = 0
-    let failed = 0
-    let downloadFailed = 0
-    if (!transcribeOnly && !audioOnly && concurrency > 1) {
-      process.stdout.write('Sequential sync enabled: processing one recording at a time.\n')
-    }
+    reporter.startHeader({
+      outputFolder,
+      totalFetched: recordings.length,
+      selected: selected.length,
+      limit,
+      since,
+      diarizationEnabled,
+      keepAudio: !deleteAudioAfterTranscribe,
+      maxRuntimeMinutes,
+      recordingOrder,
+      dryRun,
+    })
 
-    for (let i = 0; i < sorted.length; i++) {
-      const rec = sorted[i]
+    for (let i = 0; i < selected.length; i++) {
+      if (deadline && Date.now() >= deadline) {
+        stoppedEarly = true
+        reporter.noteStoppedEarly(`Runtime cap reached after ${maxRuntimeMinutes} minute(s). Stopping cleanly.`)
+        break
+      }
+
+      const rec = selected[i]
+      reporter.queue(i + 1, selected.length, rec.filename)
+
+      const itemStartedAt = Date.now()
       const defaultBaseName = generateFilename(rec)
       const dbEntry = db.findByRecordingId(rec.id)
       const baseName = dbEntry?.baseName ?? defaultBaseName
@@ -91,107 +351,176 @@ export async function syncRecordings(
         db.markTranscribed(rec.id)
       }
 
+      const hadExistingAudio = Boolean(audioPath)
+      const hasTranscript = fs.existsSync(transcriptPath)
+      const alreadyTranscribed = db.isTranscribed(rec.id) && hasTranscript
+
+      if (dryRun) {
+        let label = 'skipped existing transcript'
+        let resultSkipped = true
+        if (audioOnly && !audioPath) {
+          label = 'would download'
+          resultSkipped = false
+        } else if (transcribeOnly && audioPath && !alreadyTranscribed) {
+          label = 'would transcribe existing audio'
+          resultSkipped = false
+        } else if (!audioOnly && !transcribeOnly) {
+          if (!audioPath) label = 'would download + transcribe'
+          else if (!alreadyTranscribed || retranscribe) label = 'would transcribe existing audio'
+          else label = 'skipped existing transcript'
+          resultSkipped = label.startsWith('skipped')
+        }
+        if (resultSkipped) skipped += 1
+        reporter.result({
+          label,
+          durationMs: Date.now() - itemStartedAt,
+          skipped: resultSkipped,
+        })
+        continue
+      }
+
       if (audioOnly) {
         if (audioPath) {
-          skipped++
+          skipped += 1
+          reporter.phase('skipped')
+          reporter.result({
+            label: 'skipped existing audio',
+            durationMs: Date.now() - itemStartedAt,
+            skipped: true,
+          })
           continue
         }
 
-        const progress = `[${i + 1}/${sorted.length}]`
-        process.stdout.write(`${progress} Downloading ${rec.filename}...`)
+        reporter.phase('downloading')
         try {
           const downloadedPath = await downloadRecording(client, rec.id, audioDir, baseName)
           db.markDownloaded(rec.id, baseName, path.extname(downloadedPath).slice(1))
-          downloaded++
-          process.stdout.write(' done\n')
+          downloaded += 1
+          reporter.phase('downloaded')
+          reporter.result({
+            label: 'downloaded',
+            durationMs: Date.now() - itemStartedAt,
+          })
         } catch (err) {
-          downloadFailed++
-          failed++
-          process.stdout.write(' failed\n')
-          const message = err instanceof Error ? err.message : String(err)
-          process.stderr.write(`  Error: ${message}\n`)
+          failed += 1
+          reporter.phase('failed')
+          reporter.result({
+            label: `failed download: ${err instanceof Error ? err.message : String(err)}`,
+            durationMs: Date.now() - itemStartedAt,
+            failed: true,
+          })
         }
         continue
       }
 
       if (!retranscribe && db.isTranscribed(rec.id) && !audioPath) {
-        skipped++
+        skipped += 1
+        reporter.phase('skipped')
+        reporter.result({
+          label: 'skipped existing transcript',
+          durationMs: Date.now() - itemStartedAt,
+          skipped: true,
+        })
         continue
       }
 
+      let downloadedThisRun = false
       if (!audioPath) {
         if (transcribeOnly) {
-          skipped++
+          skipped += 1
+          reporter.phase('skipped')
+          reporter.result({
+            label: 'skipped missing audio',
+            durationMs: Date.now() - itemStartedAt,
+            skipped: true,
+          })
           continue
         }
 
-        const progress = `[${i + 1}/${sorted.length}]`
-        process.stdout.write(`${progress} Downloading ${rec.filename}...`)
+        reporter.phase('downloading')
         try {
           audioPath = await downloadRecording(client, rec.id, audioDir, baseName)
           db.markDownloaded(rec.id, baseName, path.extname(audioPath).slice(1))
-          downloaded++
-          process.stdout.write(' done\n')
+          downloaded += 1
+          downloadedThisRun = true
+          reporter.phase('downloaded')
         } catch (err) {
-          downloadFailed++
-          failed++
-          process.stdout.write(' failed\n')
-          const message = err instanceof Error ? err.message : String(err)
-          process.stderr.write(`  Error: ${message}\n`)
+          failed += 1
+          reporter.phase('failed')
+          reporter.result({
+            label: `failed download: ${err instanceof Error ? err.message : String(err)}`,
+            durationMs: Date.now() - itemStartedAt,
+            failed: true,
+          })
           continue
         }
       }
 
       if (!retranscribe && db.isTranscribed(rec.id) && fs.existsSync(transcriptPath)) {
-        skipped++
+        skipped += 1
+        reporter.phase('skipped')
+        reporter.result({
+          label: 'skipped existing transcript',
+          durationMs: Date.now() - itemStartedAt,
+          skipped: true,
+        })
         continue
       }
 
-      const start = Date.now()
-      const timer = verbose ? null : setInterval(() => {
-        const elapsed = Math.floor((Date.now() - start) / 1000)
-        process.stdout.write(`\r  [${i + 1}/${sorted.length}] ${rec.filename} (${elapsed}s)`)
-      }, 1000)
-      if (verbose) {
-        process.stdout.write(`  [${i + 1}/${sorted.length}] ${rec.filename}\n`)
-      } else {
-        process.stdout.write(`  [${i + 1}/${sorted.length}] ${rec.filename} (0s)`)
+      const timings = {
+        transcriptionMs: 0,
+        diarizationMs: 0,
+        writeMs: 0,
       }
 
       try {
-        await transcriber.transcribe(audioPath, transcriptPath, hfToken, verbose, noDiarize)
+        await transcriber.transcribe(audioPath, transcriptPath, hfToken, verbose, noDiarize, {
+          onPhaseChange: (phase) => reporter.phase(phase),
+          onTiming: (phaseTiming) => {
+            timings.transcriptionMs = phaseTiming.transcriptionMs
+            timings.diarizationMs = phaseTiming.diarizationMs
+            timings.writeMs = phaseTiming.writeMs
+          },
+        })
         db.markTranscribed(rec.id)
         if (deleteAudioAfterTranscribe && fs.existsSync(audioPath)) {
           fs.unlinkSync(audioPath)
         }
-        transcribed++
-        if (timer) clearInterval(timer)
-        const elapsed = Math.floor((Date.now() - start) / 1000)
-        if (verbose) {
-          process.stdout.write(`  [${i + 1}/${sorted.length}] ${rec.filename} done (${elapsed}s)\n`)
-        } else {
-          process.stdout.write(`\r  [${i + 1}/${sorted.length}] ${rec.filename} done (${elapsed}s)\n`)
-        }
+        transcribed += 1
+        reporter.phase('done')
+        reporter.result({
+          label: parseResultLabel({
+            downloaded: downloadedThisRun,
+            transcribed: true,
+            hadExistingAudio,
+          }),
+          durationMs: Date.now() - itemStartedAt,
+          timings,
+        })
       } catch (err) {
-        failed++
-        if (timer) clearInterval(timer)
-        const elapsed = Math.floor((Date.now() - start) / 1000)
-        if (verbose) {
-          process.stdout.write(`  [${i + 1}/${sorted.length}] ${rec.filename} failed (${elapsed}s)\n`)
-        } else {
-          process.stdout.write(`\r  [${i + 1}/${sorted.length}] ${rec.filename} failed (${elapsed}s)\n`)
-        }
-        const message = err instanceof Error ? err.message : String(err)
-        process.stderr.write(`    Error: ${message}\n`)
+        failed += 1
+        reporter.phase('failed')
+        reporter.result({
+          label: `failed transcription: ${err instanceof Error ? err.message : String(err)}`,
+          durationMs: Date.now() - itemStartedAt,
+          failed: true,
+          timings,
+        })
       }
     }
 
-    if (audioOnly) {
-      process.stdout.write(`\nDone: ${downloaded} downloaded, ${downloadFailed} failed\n`)
-      return
+    const summary: SyncRunSummary = {
+      scanned: recordings.length,
+      selected: selected.length,
+      downloaded,
+      transcribed,
+      skipped,
+      failed,
+      wallTimeMs: Date.now() - runStartedAt,
+      stoppedEarly,
     }
-
-    process.stdout.write(`\nDone: ${downloaded} downloaded, ${transcribed} transcribed, ${skipped} skipped, ${failed} failed\n`)
+    reporter.finish(summary)
+    return summary
   } finally {
     db.close()
   }
@@ -207,14 +536,27 @@ async function downloadRecording(
 
   if (mp3Url) {
     const res = await fetch(mp3Url)
+    if (!res.ok) {
+      throw new Error(`MP3 download failed: ${res.status} ${res.statusText}`)
+    }
     const buffer = await res.arrayBuffer()
     const filePath = path.join(audioDir, `${baseName}.mp3`)
-    fs.writeFileSync(filePath, Buffer.from(buffer))
-    return filePath
+    try {
+      fs.writeFileSync(filePath, Buffer.from(buffer))
+      return filePath
+    } catch (err) {
+      fs.rmSync(filePath, { force: true })
+      throw err
+    }
   }
 
   const buffer = await client.downloadAudio(id)
   const filePath = path.join(audioDir, `${baseName}.opus`)
-  fs.writeFileSync(filePath, Buffer.from(buffer))
-  return filePath
+  try {
+    fs.writeFileSync(filePath, Buffer.from(buffer))
+    return filePath
+  } catch (err) {
+    fs.rmSync(filePath, { force: true })
+    throw err
+  }
 }

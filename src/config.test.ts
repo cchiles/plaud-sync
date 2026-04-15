@@ -63,4 +63,26 @@ describe('PlaudSyncConfig', () => {
     const token = config.getToken()
     expect(token?.accessToken).toBe('tok')
   })
+
+  test('migrates config from legacy path when canonical file is missing', () => {
+    const canonicalDir = path.join(tmpDir, 'Library', 'Application Support', 'plaud-sync')
+    const legacyDir = path.join(tmpDir, '.config', 'plaud-sync')
+    fs.mkdirSync(legacyDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(legacyDir, 'config.json'),
+      JSON.stringify({
+        token: {
+          accessToken: 'legacy-token',
+          tokenType: 'Bearer',
+          issuedAt: 1700000000000,
+          expiresAt: 1726000000000,
+          region: 'us',
+        },
+      }),
+    )
+
+    const config = new PlaudSyncConfig(canonicalDir, legacyDir)
+    expect(config.getToken()?.accessToken).toBe('legacy-token')
+    expect(fs.existsSync(path.join(canonicalDir, 'config.json'))).toBe(true)
+  })
 })
