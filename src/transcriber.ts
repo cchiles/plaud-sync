@@ -56,7 +56,9 @@ interface MergedSegment {
 }
 
 interface MemorySnapshot {
+  availableBytes: number
   freeBytes: number
+  reclaimableBytes: number
   totalBytes: number
 }
 
@@ -91,6 +93,7 @@ export interface TranscribeHooks {
 
 const GIB = 1024 ** 3
 const DEFAULT_MEMORY_POLL_MS = 2000
+const RAW_MEMORY_SNAPSHOT_MODE = 'raw'
 
 function toGiB(bytes: number): number {
   return bytes / GIB
@@ -98,6 +101,65 @@ function toGiB(bytes: number): number {
 
 function roundGiB(bytes: number): number {
   return Math.round(toGiB(bytes) * 10) / 10
+}
+
+export function parseMacOSVmStatSnapshot(output: string, totalBytes: number): MemorySnapshot | null {
+  const pageSizeMatch = output.match(/page size of (\d+) bytes/i)
+  if (!pageSizeMatch) return null
+
+  const pageSize = Number.parseInt(pageSizeMatch[1], 10)
+  if (!Number.isFinite(pageSize) || pageSize <= 0) return null
+
+  const readPageCount = (label: string): number => {
+    const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const match = output.match(new RegExp(`${escapedLabel}:\\s+(\\d+)\\.?`, 'i'))
+    return match ? Number.parseInt(match[1], 10) : 0
+  }
+
+  const freeBytes = readPageCount('Pages free') * pageSize
+  const speculativeBytes = readPageCount('Pages speculative') * pageSize
+  const inactiveBytes = readPageCount('Pages inactive') * pageSize
+  const purgeableBytes = readPageCount('Pages purgeable') * pageSize
+  const reclaimableBytes = speculativeBytes + inactiveBytes + purgeableBytes
+  const availableBytes = Math.min(totalBytes, freeBytes + reclaimableBytes)
+
+  return {
+    availableBytes,
+    freeBytes,
+    reclaimableBytes,
+    totalBytes,
+  }
+}
+
+export function getMemorySnapshot(): MemorySnapshot {
+  const totalBytes = os.totalmem()
+  const freeBytes = os.freemem()
+
+  if (process.platform !== 'darwin' || process.env.PLAUD_SYNC_MEMORY_SNAPSHOT_MODE === RAW_MEMORY_SNAPSHOT_MODE) {
+    return {
+      availableBytes: freeBytes,
+      freeBytes,
+      reclaimableBytes: 0,
+      totalBytes,
+    }
+  }
+
+  try {
+    const vmStat = execFileSync('vm_stat', { encoding: 'utf-8' })
+    return parseMacOSVmStatSnapshot(vmStat, totalBytes) ?? {
+      availableBytes: freeBytes,
+      freeBytes,
+      reclaimableBytes: 0,
+      totalBytes,
+    }
+  } catch {
+    return {
+      availableBytes: freeBytes,
+      freeBytes,
+      reclaimableBytes: 0,
+      totalBytes,
+    }
+  }
 }
 
 function estimateWorkingSetBytes(input: TranscriptionSafetyInput): number {
@@ -124,7 +186,7 @@ function getRuntimeSafetyThresholds(input: TranscriptionSafetyInput): RuntimeSaf
 
 export function assessTranscriptionSafety(
   input: TranscriptionSafetyInput,
-  memory: MemorySnapshot = { freeBytes: os.freemem(), totalBytes: os.totalmem() },
+  memory: MemorySnapshot = getMemorySnapshot(),
 ): TranscriptionSafetyIssue | null {
   const estimatedNeedBytes = estimateWorkingSetBytes(input)
   const recommendedFreeBytes = Math.max(
@@ -132,7 +194,7 @@ export function assessTranscriptionSafety(
     Math.ceil(estimatedNeedBytes * 0.35),
   )
   const minimumTotalBytes = input.diarizationEnabled ? 8 * GIB : 4 * GIB
-  const currentFreeGiB = roundGiB(memory.freeBytes)
+  const currentAvailableGiB = roundGiB(memory.availableBytes)
   const estimatedNeedGiB = roundGiB(estimatedNeedBytes)
   const recommendedFreeGiB = roundGiB(recommendedFreeBytes)
 
@@ -140,16 +202,16 @@ export function assessTranscriptionSafety(
     return {
       reason: `machine has ${roundGiB(memory.totalBytes)} GiB total RAM; this mode expects at least ${roundGiB(minimumTotalBytes)} GiB`,
       recommendedFreeGiB,
-      currentFreeGiB,
+      currentFreeGiB: currentAvailableGiB,
       estimatedNeedGiB,
     }
   }
 
-  if (memory.freeBytes < recommendedFreeBytes) {
+  if (memory.availableBytes < recommendedFreeBytes) {
     return {
-      reason: `only ${currentFreeGiB} GiB free; this recording is estimated to need about ${estimatedNeedGiB} GiB of working memory`,
+      reason: `only ${currentAvailableGiB} GiB available; this recording is estimated to need about ${estimatedNeedGiB} GiB of working memory`,
       recommendedFreeGiB,
-      currentFreeGiB,
+      currentFreeGiB: currentAvailableGiB,
       estimatedNeedGiB,
     }
   }
@@ -195,12 +257,12 @@ function runProcess(
 
     if (thresholds) {
       watchdogTimer = setInterval(() => {
-        const freeBytes = os.freemem()
-        if (freeBytes >= thresholds.stopFreeBytes || watchdogReason) return
+        const memory = getMemorySnapshot()
+        if (memory.availableBytes >= thresholds.stopFreeBytes || watchdogReason) return
 
         watchdogReason =
           `${options.phaseLabel ?? 'transcription'} stopped to protect system memory: ` +
-          `free memory fell to ${roundGiB(freeBytes)} GiB, below the ${thresholds.stopFreeGiB} GiB safety floor ` +
+          `available memory fell to ${roundGiB(memory.availableBytes)} GiB, below the ${thresholds.stopFreeGiB} GiB safety floor ` +
           `(job estimate ${thresholds.estimatedNeedGiB} GiB)`
 
         proc.kill('SIGTERM')

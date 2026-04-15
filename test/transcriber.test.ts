@@ -4,7 +4,12 @@ import * as path from 'path'
 import * as os from 'os'
 import * as child_process from 'child_process'
 import { EventEmitter } from 'events'
-import { Transcriber, assessTranscriptionSafety, checkPrerequisites } from '../src/transcriber.js'
+import {
+  Transcriber,
+  assessTranscriptionSafety,
+  checkPrerequisites,
+  parseMacOSVmStatSnapshot,
+} from '../src/transcriber.js'
 
 describe('Transcriber', () => {
   it('runs mlx_whisper then diarize and merges output', async () => {
@@ -235,8 +240,10 @@ describe('assessTranscriptionSafety', () => {
         diarizationEnabled: true,
       },
       {
+        availableBytes: 3 * 1024 ** 3,
         totalBytes: 8 * 1024 ** 3,
         freeBytes: 3 * 1024 ** 3,
+        reclaimableBytes: 0,
       },
     )
 
@@ -252,11 +259,32 @@ describe('assessTranscriptionSafety', () => {
         diarizationEnabled: false,
       },
       {
+        availableBytes: 20 * 1024 ** 3,
         totalBytes: 32 * 1024 ** 3,
         freeBytes: 20 * 1024 ** 3,
+        reclaimableBytes: 0,
       },
     )
 
     expect(issue).toBeNull()
+  })
+
+  it('treats inactive and speculative pages as available on macOS', () => {
+    const snapshot = parseMacOSVmStatSnapshot(
+      `Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                               75961.
+Pages active:                            412051.
+Pages inactive:                          375613.
+Pages speculative:                        36174.
+Pages wired down:                        114187.
+Pages purgeable:                          15633.
+`,
+      16 * 1024 ** 3,
+    )
+
+    expect(snapshot).not.toBeNull()
+    expect(snapshot?.freeBytes).toBe(75961 * 16384)
+    expect(snapshot?.reclaimableBytes).toBe((375613 + 36174 + 15633) * 16384)
+    expect(snapshot?.availableBytes).toBe((75961 + 375613 + 36174 + 15633) * 16384)
   })
 })

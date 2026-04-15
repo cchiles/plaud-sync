@@ -110,6 +110,10 @@ function parseResultLabel(args: {
   return 'done'
 }
 
+function isMemorySafetyMessage(message: string): boolean {
+  return message.includes('memory safety check') || message.includes('stopped to protect system memory')
+}
+
 class ProgressReporter {
   private readonly interactive: boolean
   private readonly verbose: boolean
@@ -596,12 +600,16 @@ export async function syncRecordings(
         reporter.result({
           label:
             `blocked by memory safety check: ${safetyIssue.reason}; ` +
-            `need about ${safetyIssue.recommendedFreeGiB} GiB free before retrying`,
+            `need about ${safetyIssue.recommendedFreeGiB} GiB available before retrying`,
           durationMs: Date.now() - itemStartedAt,
           failed: true,
           countedTranscription: countsTowardTranscription,
         })
-        continue
+        stoppedEarly = true
+        reporter.noteStoppedEarly(
+          `Low memory detected before starting "${rec.filename}". Stopping cleanly so you can retry later after freeing memory.`,
+        )
+        break
       }
 
       const timings = {
@@ -636,15 +644,23 @@ export async function syncRecordings(
           countedTranscription: countsTowardTranscription,
         })
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
         failed += 1
         reporter.phase('failed')
         reporter.result({
-          label: `failed transcription: ${err instanceof Error ? err.message : String(err)}`,
+          label: `failed transcription: ${message}`,
           durationMs: Date.now() - itemStartedAt,
           failed: true,
           timings,
           countedTranscription: countsTowardTranscription,
         })
+        if (isMemorySafetyMessage(message)) {
+          stoppedEarly = true
+          reporter.noteStoppedEarly(
+            `Low memory detected while transcribing "${rec.filename}". Stopping cleanly so you can retry later after freeing memory.`,
+          )
+          break
+        }
       }
     }
 

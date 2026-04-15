@@ -66,17 +66,22 @@ describe('generateFilename', () => {
 describe('syncRecordings', () => {
   let tmpDir: string
   let originalBypassValue: string | undefined
+  let originalSnapshotMode: string | undefined
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plaud-sync-test-'))
     originalBypassValue = process.env.PLAUD_SYNC_BYPASS_MEMORY_CHECK
+    originalSnapshotMode = process.env.PLAUD_SYNC_MEMORY_SNAPSHOT_MODE
     process.env.PLAUD_SYNC_BYPASS_MEMORY_CHECK = '1'
+    process.env.PLAUD_SYNC_MEMORY_SNAPSHOT_MODE = 'raw'
   })
 
   afterEach(() => {
     mock.restore()
     if (originalBypassValue == null) delete process.env.PLAUD_SYNC_BYPASS_MEMORY_CHECK
     else process.env.PLAUD_SYNC_BYPASS_MEMORY_CHECK = originalBypassValue
+    if (originalSnapshotMode == null) delete process.env.PLAUD_SYNC_MEMORY_SNAPSHOT_MODE
+    else process.env.PLAUD_SYNC_MEMORY_SNAPSHOT_MODE = originalSnapshotMode
     fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
@@ -419,9 +424,68 @@ describe('syncRecordings', () => {
       expect(transcriber.transcribe).not.toHaveBeenCalled()
       expect(summary.failed).toBe(1)
       expect(summary.transcribed).toBe(0)
+      expect(summary.stoppedEarly).toBe(true)
     } finally {
       freeMemSpy.mockRestore()
       totalMemSpy.mockRestore()
     }
+  })
+
+  it('stops the run after the first preflight memory block', async () => {
+    delete process.env.PLAUD_SYNC_BYPASS_MEMORY_CHECK
+    const recordings = [
+      makeRecording({ id: 'rec-1', filename: 'First', filesize: 900 * 1024 * 1024, duration: 2 * 60 * 60 * 1000 }),
+      makeRecording({ id: 'rec-2', filename: 'Second', filesize: 900 * 1024 * 1024, duration: 2 * 60 * 60 * 1000 }),
+    ]
+    const client: PlaudClient = {
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock((id: string) => Promise.resolve(`https://cdn.example.com/${id}.mp3`)),
+      downloadAudio: mock(() => undefined),
+    } as unknown as PlaudClient
+    const transcriber: Transcriber = {
+      transcribe: mock(() => Promise.resolve(undefined)),
+    } as unknown as Transcriber
+
+    spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(makeStreamingResponse('audio-data'))) as unknown as typeof fetch)
+    const freeMemSpy = spyOn(os, 'freemem').mockImplementation(() => 3 * 1024 ** 3)
+    const totalMemSpy = spyOn(os, 'totalmem').mockImplementation(() => 8 * 1024 ** 3)
+
+    try {
+      const summary = await syncRecordings(client, transcriber, tmpDir, { hfToken: 'hf-token' })
+
+      expect(summary.failed).toBe(1)
+      expect(summary.stoppedEarly).toBe(true)
+      expect(client.getMp3Url).toHaveBeenCalledTimes(1)
+      expect(transcriber.transcribe).not.toHaveBeenCalled()
+    } finally {
+      freeMemSpy.mockRestore()
+      totalMemSpy.mockRestore()
+    }
+  })
+
+  it('stops the run after a runtime memory watchdog failure', async () => {
+    const recordings = [
+      makeRecording({ id: 'rec-1', filename: 'First' }),
+      makeRecording({ id: 'rec-2', filename: 'Second', start_time: new Date('2026-03-26T10:00:00Z').getTime() }),
+    ]
+    const client: PlaudClient = {
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock((id: string) => Promise.resolve(`https://cdn.example.com/${id}.mp3`)),
+      downloadAudio: mock(() => undefined),
+    } as unknown as PlaudClient
+    const transcriber: Transcriber = {
+      transcribe: mock()
+        .mockImplementationOnce(() => Promise.reject(new Error('transcription stopped to protect system memory: free memory fell to 0.6 GiB')))
+        .mockImplementationOnce(() => Promise.resolve(undefined)),
+    } as unknown as Transcriber
+
+    spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(makeStreamingResponse('audio-data'))) as unknown as typeof fetch)
+
+    const summary = await syncRecordings(client, transcriber, tmpDir)
+
+    expect(summary.failed).toBe(1)
+    expect(summary.transcribed).toBe(0)
+    expect(summary.stoppedEarly).toBe(true)
+    expect(transcriber.transcribe).toHaveBeenCalledTimes(1)
   })
 })
