@@ -8,7 +8,7 @@ import type { SyncRunSummary as ConfigRunSummary } from './config.js'
 import type { RecordingOrder } from './sync.js'
 import { checkPrerequisites } from './transcriber.js'
 
-export const VERSION = '0.3.2'
+export const VERSION = '0.3.3'
 export const DEFAULT_OUTPUT = path.join(os.homedir(), 'PlaudSync')
 const PLIST_LABEL = 'com.plaud-sync.agent'
 const PLIST_PATH = path.join(os.homedir(), 'Library', 'LaunchAgents', `${PLIST_LABEL}.plist`)
@@ -20,7 +20,7 @@ const MODEL_CACHE_DIR = path.join(
   '.cache',
   'huggingface',
   'hub',
-  'models--mlx-community--whisper-small',
+  'models--mlx-community--whisper-small-mlx',
 )
 
 export interface ParsedInstallCommand {

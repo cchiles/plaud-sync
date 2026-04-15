@@ -63,7 +63,7 @@ describe('Transcriber', () => {
       // First call should be mlx_whisper
       const firstArgs = spy.mock.calls[0][1] as string[]
       expect(firstArgs).toContain('mlx_whisper')
-      expect(firstArgs).toContain('mlx-community/whisper-small')
+      expect(firstArgs).toContain('mlx-community/whisper-small-mlx')
 
       // Second call should be diarize
       const secondArgs = spy.mock.calls[1][1] as string[]
@@ -147,6 +147,31 @@ describe('Transcriber', () => {
     } finally {
       spy.mockRestore()
       if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath)
+    }
+  })
+
+  it('throws a helpful error when mlx_whisper produces no json output', async () => {
+    const emitter = new EventEmitter() as any
+    emitter.stdout = new EventEmitter()
+    emitter.stderr = new EventEmitter()
+    const spy = spyOn(child_process, 'spawn').mockImplementation((() => {
+      setTimeout(() => emitter.emit('close', 0), 0)
+      return emitter
+    }) as any)
+
+    const audioPath = path.join(os.tmpdir(), `plaud-test-${Date.now()}.mp3`)
+    const outputPath = path.join(os.tmpdir(), `plaud-test-${Date.now()}.txt`)
+    fs.writeFileSync(audioPath, Buffer.alloc(1024))
+
+    try {
+      const transcriber = new Transcriber()
+      await expect(
+        transcriber.transcribe(audioPath, outputPath, undefined, false, true),
+      ).rejects.toThrow('transcription finished without producing JSON output')
+    } finally {
+      spy.mockRestore()
+      if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath)
+      if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath)
     }
   })
 

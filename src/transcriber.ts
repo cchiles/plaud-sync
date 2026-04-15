@@ -33,7 +33,7 @@ if __name__ == "__main__":
     main()
 `
 
-const DEFAULT_TRANSCRIPTION_MODEL = 'mlx-community/whisper-small'
+const DEFAULT_TRANSCRIPTION_MODEL = 'mlx-community/whisper-small-mlx'
 
 interface MlxWhisperSegment {
   id: number
@@ -312,6 +312,12 @@ export class Transcriber {
 
       const baseName = path.basename(audioPath, path.extname(audioPath))
       const jsonPath = path.join(tmpDir, `${baseName}.json`)
+      if (!fs.existsSync(jsonPath)) {
+        throw new Error(
+          `transcription finished without producing JSON output at ${jsonPath}; ` +
+          `check that model ${DEFAULT_TRANSCRIPTION_MODEL} is available`,
+        )
+      }
       const raw = fs.readFileSync(jsonPath, 'utf-8')
       const data = JSON.parse(raw) as { segments: MlxWhisperSegment[] }
 
