@@ -410,8 +410,8 @@ describe('syncRecordings', () => {
 
     const response = makeStreamingResponse(new Uint8Array(32))
     spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(response)) as unknown as typeof fetch)
-    const freeMemSpy = spyOn(os, 'freemem').mockImplementation(() => 6 * 1024 ** 3)
-    const totalMemSpy = spyOn(os, 'totalmem').mockImplementation(() => 16 * 1024 ** 3)
+    const freeMemSpy = spyOn(os, 'freemem').mockImplementation(() => 3 * 1024 ** 3)
+    const totalMemSpy = spyOn(os, 'totalmem').mockImplementation(() => 8 * 1024 ** 3)
 
     try {
       const summary = await syncRecordings(client, transcriber, tmpDir, { hfToken: 'hf-token' })

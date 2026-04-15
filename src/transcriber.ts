@@ -33,6 +33,8 @@ if __name__ == "__main__":
     main()
 `
 
+const DEFAULT_TRANSCRIPTION_MODEL = 'mlx-community/whisper-small'
+
 interface MlxWhisperSegment {
   id: number
   start: number
@@ -99,17 +101,18 @@ function roundGiB(bytes: number): number {
 }
 
 function estimateWorkingSetBytes(input: TranscriptionSafetyInput): number {
-  const baseBytes = input.diarizationEnabled ? 12 * GIB : 6 * GIB
-  const audioBytes = Math.max(1 * GIB, input.audioBytes * 3)
-  const durationBytes = Math.ceil(input.durationMs / (30 * 60 * 1000)) * (input.diarizationEnabled ? 1.5 * GIB : 0.75 * GIB)
+  const baseBytes = input.diarizationEnabled ? 5 * GIB : 2.5 * GIB
+  const audioBytes = Math.max(0.5 * GIB, input.audioBytes * 0.5)
+  const durationBytes =
+    Math.ceil(input.durationMs / (30 * 60 * 1000)) * (input.diarizationEnabled ? 0.5 * GIB : 0.25 * GIB)
   return baseBytes + audioBytes + durationBytes
 }
 
 function getRuntimeSafetyThresholds(input: TranscriptionSafetyInput): RuntimeSafetyThresholds {
   const estimatedNeedBytes = estimateWorkingSetBytes(input)
   const stopFreeBytes = Math.max(
-    input.diarizationEnabled ? 6 * GIB : 2 * GIB,
-    Math.ceil(estimatedNeedBytes * 0.35),
+    input.diarizationEnabled ? 4 * GIB : 1.5 * GIB,
+    Math.ceil(estimatedNeedBytes * 0.25),
   )
 
   return {
@@ -125,10 +128,10 @@ export function assessTranscriptionSafety(
 ): TranscriptionSafetyIssue | null {
   const estimatedNeedBytes = estimateWorkingSetBytes(input)
   const recommendedFreeBytes = Math.max(
-    input.diarizationEnabled ? 10 * GIB : 4 * GIB,
-    Math.ceil(estimatedNeedBytes * 0.75),
+    input.diarizationEnabled ? 4.5 * GIB : 2 * GIB,
+    Math.ceil(estimatedNeedBytes * 0.35),
   )
-  const minimumTotalBytes = input.diarizationEnabled ? 16 * GIB : 8 * GIB
+  const minimumTotalBytes = input.diarizationEnabled ? 8 * GIB : 4 * GIB
   const currentFreeGiB = roundGiB(memory.freeBytes)
   const estimatedNeedGiB = roundGiB(estimatedNeedBytes)
   const recommendedFreeGiB = roundGiB(recommendedFreeBytes)
@@ -284,7 +287,7 @@ export class Transcriber {
       const mlxArgs = [
         '--python', '3.12', '--from', 'mlx-whisper', 'mlx_whisper',
         audioPath,
-        '--model', 'mlx-community/whisper-large-v3-turbo',
+        '--model', DEFAULT_TRANSCRIPTION_MODEL,
         '--language', 'en',
         '--output-format', 'json',
         '--output-dir', tmpDir,

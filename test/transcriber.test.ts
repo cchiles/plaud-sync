@@ -63,7 +63,7 @@ describe('Transcriber', () => {
       // First call should be mlx_whisper
       const firstArgs = spy.mock.calls[0][1] as string[]
       expect(firstArgs).toContain('mlx_whisper')
-      expect(firstArgs).toContain('mlx-community/whisper-large-v3-turbo')
+      expect(firstArgs).toContain('mlx-community/whisper-small')
 
       // Second call should be diarize
       const secondArgs = spy.mock.calls[1][1] as string[]
@@ -210,13 +210,13 @@ describe('assessTranscriptionSafety', () => {
         diarizationEnabled: true,
       },
       {
-        totalBytes: 16 * 1024 ** 3,
-        freeBytes: 6 * 1024 ** 3,
+        totalBytes: 8 * 1024 ** 3,
+        freeBytes: 3 * 1024 ** 3,
       },
     )
 
     expect(issue).not.toBeNull()
-    expect(issue?.reason).toContain('only')
+    expect(issue?.reason).toMatch(/only|expects at least/)
   })
 
   it('allows smaller non-diarized jobs with healthy headroom', () => {

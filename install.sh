@@ -56,10 +56,10 @@ sudo mv plaud-sync "$INSTALL_DIR/plaud-sync"
 sudo chmod 755 "$INSTALL_DIR/plaud-sync"
 
 # Pre-download mlx-whisper model so first sync is fast
-echo "Pre-downloading mlx-whisper model (large-v3-turbo)..."
+echo "Pre-downloading mlx-whisper model (whisper-small)..."
 uvx --python 3.12 --from mlx-whisper python -c "
 from huggingface_hub import snapshot_download
-snapshot_download('mlx-community/whisper-large-v3-turbo')
+snapshot_download('mlx-community/whisper-small')
 print('Model cached.')
 "
 
