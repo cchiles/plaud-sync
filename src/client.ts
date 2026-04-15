@@ -57,12 +57,12 @@ export class PlaudClient {
     }
   }
 
-  async downloadAudio(id: string): Promise<ArrayBuffer> {
+  async downloadAudio(id: string): Promise<Response> {
     const token = await this.auth.getToken()
     const res = await fetch(`${this.baseUrl}/file/download/${id}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (!res.ok) throw new Error(`Download failed: ${res.status}`)
-    return res.arrayBuffer()
+    return res
   }
 }

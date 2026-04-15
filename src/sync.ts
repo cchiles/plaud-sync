@@ -1,6 +1,9 @@
 import * as fs from 'fs'
 import * as path from 'path'
+import { Readable } from 'stream'
+import { pipeline } from 'stream/promises'
 import type { PlaudClient } from './client.js'
+import { assessTranscriptionSafety } from './transcriber.js'
 import type { Transcriber } from './transcriber.js'
 import type { PlaudRecording } from './types.js'
 import { SyncDb } from './db.js'
@@ -71,6 +74,31 @@ function formatDateOnly(timestamp: number): string {
   return new Date(timestamp).toISOString().slice(0, 10)
 }
 
+function formatClockDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+
+  if (hours > 0) {
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  }
+
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+function formatItemsPerSecond(rate: number): string {
+  if (!Number.isFinite(rate) || rate <= 0) return '0.00it/s'
+  return `${rate.toFixed(2)}it/s`
+}
+
+function renderProgressBar(completed: number, total: number, width = 40): string {
+  const safeTotal = Math.max(total, 1)
+  const ratio = Math.max(0, Math.min(1, completed / safeTotal))
+  const filled = Math.round(ratio * width)
+  return `${'█'.repeat(filled)}${' '.repeat(width - filled)}`
+}
+
 function parseResultLabel(args: {
   downloaded: boolean
   transcribed: boolean
@@ -102,6 +130,9 @@ class ProgressReporter {
   private completed = 0
   private skipped = 0
   private failed = 0
+  private transcriptionTotal = 0
+  private transcriptionCompleted = 0
+  private transcriptionStartedAt?: number
 
   constructor(options: { interactive: boolean; verbose: boolean; heartbeatMs: number }) {
     this.interactive = options.interactive
@@ -135,6 +166,12 @@ class ProgressReporter {
     this.startLiveUpdates()
   }
 
+  setTranscriptionPlan(total: number): void {
+    this.transcriptionTotal = Math.max(0, total)
+    this.transcriptionCompleted = 0
+    this.transcriptionStartedAt = total > 0 ? Date.now() : undefined
+  }
+
   queue(index: number, total: number, name: string): void {
     this.current = {
       index,
@@ -160,12 +197,17 @@ class ProgressReporter {
     skipped?: boolean
     failed?: boolean
     timings?: { transcriptionMs: number; diarizationMs: number; writeMs: number }
+    countedTranscription?: boolean
   }): void {
     if (!this.current) return
 
     if (result.failed) this.failed += 1
     else if (result.skipped) this.skipped += 1
     else this.completed += 1
+
+    if (result.countedTranscription) {
+      this.transcriptionCompleted = Math.min(this.transcriptionCompleted + 1, this.transcriptionTotal)
+    }
 
     const detailParts = [`elapsed=${formatDuration(result.durationMs)}`]
     if (this.verbose && result.timings) {
@@ -196,6 +238,9 @@ class ProgressReporter {
 
   finish(summary: SyncRunSummary): void {
     this.stopLiveUpdates()
+    if (this.transcriptionTotal > 0) {
+      this.line(this.renderTranscriptionProgress(true))
+    }
     this.line(
       `Done: scanned=${summary.scanned}, selected=${summary.selected}, downloaded=${summary.downloaded}, transcribed=${summary.transcribed}, skipped=${summary.skipped}, failed=${summary.failed}, wall=${formatDuration(summary.wallTimeMs)}${summary.stoppedEarly ? ', stopped-early=yes' : ''}`,
     )
@@ -222,9 +267,10 @@ class ProgressReporter {
   private renderFooter(): void {
     if (!this.interactive || this.verbose || !this.current) return
     const elapsed = formatDuration(Date.now() - this.current.startedAt)
-    const footer =
-      `Current ${this.current.index}/${this.current.total}: ${this.current.name} ` +
-      `[${this.current.phase}] elapsed=${elapsed} completed=${this.completed} skipped=${this.skipped} failed=${this.failed}`
+    const footer = this.transcriptionTotal > 0
+      ? `${this.renderTranscriptionProgress()} current=${this.current.name} [${this.current.phase}] item-elapsed=${elapsed}`
+      : `Current ${this.current.index}/${this.current.total}: ${this.current.name} ` +
+        `[${this.current.phase}] elapsed=${elapsed} completed=${this.completed} skipped=${this.skipped} failed=${this.failed}`
     process.stdout.write(`\r\x1b[2K${footer}`)
   }
 
@@ -236,6 +282,21 @@ class ProgressReporter {
     if (this.interactive && !this.verbose && this.current) {
       this.renderFooter()
     }
+  }
+
+  private renderTranscriptionProgress(final = false): string {
+    const total = this.transcriptionTotal
+    const completed = final ? total : this.transcriptionCompleted
+    const percent = total === 0 ? 100 : Math.round((completed / total) * 100)
+    const elapsedMs = this.transcriptionStartedAt ? Date.now() - this.transcriptionStartedAt : 0
+    const rate = elapsedMs > 0 ? completed / (elapsedMs / 1000) : 0
+    const remaining = Math.max(0, total - completed)
+    const etaMs = rate > 0 ? (remaining / rate) * 1000 : 0
+
+    return (
+      `${String(percent).padStart(3, ' ')}%|${renderProgressBar(completed, total)}| ` +
+      `${completed}/${total} [${formatClockDuration(elapsedMs)}<${formatClockDuration(etaMs)}, ${formatItemsPerSecond(rate)}]`
+    )
   }
 }
 
@@ -261,6 +322,43 @@ function selectRecordings(
   }
 
   return selected
+}
+
+function countPlannedTranscriptions(
+  recordings: PlaudRecording[],
+  outputFolder: string,
+  options: Pick<SyncOptions, 'audioOnly' | 'transcribeOnly' | 'retranscribe' | 'dryRun'>,
+  db: SyncDb,
+): number {
+  if (options.audioOnly || options.dryRun) return 0
+
+  const audioDir = path.join(outputFolder, 'audio')
+  const transcriptDir = path.join(outputFolder, 'transcripts')
+
+  let total = 0
+
+  for (const rec of recordings) {
+    const defaultBaseName = generateFilename(rec)
+    const dbEntry = db.findByRecordingId(rec.id)
+    const baseName = dbEntry?.baseName ?? defaultBaseName
+    const transcriptPath = path.join(transcriptDir, `${baseName}.txt`)
+
+    let audioPath = findExistingAudio(audioDir, baseName)
+    if (!audioPath && dbEntry && dbEntry.baseName !== baseName) {
+      audioPath = findExistingAudio(audioDir, dbEntry.baseName)
+    }
+
+    const hasTranscript = fs.existsSync(transcriptPath)
+    const isMarkedTranscribed = db.isTranscribed(rec.id)
+
+    if (!options.retranscribe && hasTranscript) continue
+    if (!options.retranscribe && isMarkedTranscribed && !audioPath) continue
+    if (options.transcribeOnly && !audioPath) continue
+
+    total += 1
+  }
+
+  return total
 }
 
 export async function syncRecordings(
@@ -305,6 +403,12 @@ export async function syncRecordings(
   try {
     const recordings = await client.listRecordings()
     const selected = selectRecordings(recordings, { recordingOrder, since, limit })
+    const plannedTranscriptions = countPlannedTranscriptions(selected, outputFolder, {
+      audioOnly,
+      transcribeOnly,
+      retranscribe,
+      dryRun,
+    }, db)
 
     reporter.startHeader({
       outputFolder,
@@ -318,6 +422,7 @@ export async function syncRecordings(
       recordingOrder,
       dryRun,
     })
+    reporter.setTranscriptionPlan(plannedTranscriptions)
 
     for (let i = 0; i < selected.length; i++) {
       if (deadline && Date.now() >= deadline) {
@@ -354,6 +459,12 @@ export async function syncRecordings(
       const hadExistingAudio = Boolean(audioPath)
       const hasTranscript = fs.existsSync(transcriptPath)
       const alreadyTranscribed = db.isTranscribed(rec.id) && hasTranscript
+      const countsTowardTranscription =
+        !audioOnly &&
+        !dryRun &&
+        (!hasTranscript || retranscribe) &&
+        ((!transcribeOnly) || Boolean(audioPath)) &&
+        (retranscribe || !db.isTranscribed(rec.id) || Boolean(audioPath))
 
       if (dryRun) {
         let label = 'skipped existing transcript'
@@ -467,6 +578,32 @@ export async function syncRecordings(
         continue
       }
 
+      const audioBytes = audioPath && fs.existsSync(audioPath)
+        ? fs.statSync(audioPath).size
+        : rec.filesize
+      const safetyIssue =
+        process.env.PLAUD_SYNC_BYPASS_MEMORY_CHECK === '1'
+          ? null
+          : assessTranscriptionSafety({
+              audioBytes,
+              durationMs: rec.duration,
+              diarizationEnabled,
+            })
+
+      if (safetyIssue) {
+        failed += 1
+        reporter.phase('failed')
+        reporter.result({
+          label:
+            `blocked by memory safety check: ${safetyIssue.reason}; ` +
+            `need about ${safetyIssue.recommendedFreeGiB} GiB free before retrying`,
+          durationMs: Date.now() - itemStartedAt,
+          failed: true,
+          countedTranscription: countsTowardTranscription,
+        })
+        continue
+      }
+
       const timings = {
         transcriptionMs: 0,
         diarizationMs: 0,
@@ -496,6 +633,7 @@ export async function syncRecordings(
           }),
           durationMs: Date.now() - itemStartedAt,
           timings,
+          countedTranscription: countsTowardTranscription,
         })
       } catch (err) {
         failed += 1
@@ -505,6 +643,7 @@ export async function syncRecordings(
           durationMs: Date.now() - itemStartedAt,
           failed: true,
           timings,
+          countedTranscription: countsTowardTranscription,
         })
       }
     }
@@ -539,10 +678,9 @@ async function downloadRecording(
     if (!res.ok) {
       throw new Error(`MP3 download failed: ${res.status} ${res.statusText}`)
     }
-    const buffer = await res.arrayBuffer()
     const filePath = path.join(audioDir, `${baseName}.mp3`)
     try {
-      fs.writeFileSync(filePath, Buffer.from(buffer))
+      await streamResponseToFile(res, filePath)
       return filePath
     } catch (err) {
       fs.rmSync(filePath, { force: true })
@@ -550,13 +688,27 @@ async function downloadRecording(
     }
   }
 
-  const buffer = await client.downloadAudio(id)
+  const res = await client.downloadAudio(id)
   const filePath = path.join(audioDir, `${baseName}.opus`)
   try {
-    fs.writeFileSync(filePath, Buffer.from(buffer))
+    await streamResponseToFile(res, filePath)
     return filePath
   } catch (err) {
     fs.rmSync(filePath, { force: true })
+    throw err
+  }
+}
+
+async function streamResponseToFile(res: Response, filePath: string): Promise<void> {
+  if (!res.body) {
+    throw new Error('Download response had no body')
+  }
+
+  const output = fs.createWriteStream(filePath)
+  try {
+    await pipeline(Readable.fromWeb(res.body as globalThis.ReadableStream), output)
+  } catch (err) {
+    output.destroy()
     throw err
   }
 }

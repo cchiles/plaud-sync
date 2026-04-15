@@ -53,6 +53,30 @@ interface MergedSegment {
   speaker: string
 }
 
+interface MemorySnapshot {
+  freeBytes: number
+  totalBytes: number
+}
+
+export interface TranscriptionSafetyInput {
+  audioBytes: number
+  durationMs: number
+  diarizationEnabled: boolean
+}
+
+export interface TranscriptionSafetyIssue {
+  reason: string
+  recommendedFreeGiB: number
+  currentFreeGiB: number
+  estimatedNeedGiB: number
+}
+
+interface RuntimeSafetyThresholds {
+  stopFreeBytes: number
+  stopFreeGiB: number
+  estimatedNeedGiB: number
+}
+
 export type TranscriptionPhase =
   | 'transcribing'
   | 'diarizing'
@@ -63,21 +87,152 @@ export interface TranscribeHooks {
   onTiming?: (timing: { transcriptionMs: number; diarizationMs: number; writeMs: number }) => void
 }
 
-function runProcess(cmd: string, args: string[], verbose: boolean, env?: Record<string, string>): Promise<string> {
+const GIB = 1024 ** 3
+const DEFAULT_MEMORY_POLL_MS = 2000
+
+function toGiB(bytes: number): number {
+  return bytes / GIB
+}
+
+function roundGiB(bytes: number): number {
+  return Math.round(toGiB(bytes) * 10) / 10
+}
+
+function estimateWorkingSetBytes(input: TranscriptionSafetyInput): number {
+  const baseBytes = input.diarizationEnabled ? 12 * GIB : 6 * GIB
+  const audioBytes = Math.max(1 * GIB, input.audioBytes * 3)
+  const durationBytes = Math.ceil(input.durationMs / (30 * 60 * 1000)) * (input.diarizationEnabled ? 1.5 * GIB : 0.75 * GIB)
+  return baseBytes + audioBytes + durationBytes
+}
+
+function getRuntimeSafetyThresholds(input: TranscriptionSafetyInput): RuntimeSafetyThresholds {
+  const estimatedNeedBytes = estimateWorkingSetBytes(input)
+  const stopFreeBytes = Math.max(
+    input.diarizationEnabled ? 6 * GIB : 2 * GIB,
+    Math.ceil(estimatedNeedBytes * 0.35),
+  )
+
+  return {
+    stopFreeBytes,
+    stopFreeGiB: roundGiB(stopFreeBytes),
+    estimatedNeedGiB: roundGiB(estimatedNeedBytes),
+  }
+}
+
+export function assessTranscriptionSafety(
+  input: TranscriptionSafetyInput,
+  memory: MemorySnapshot = { freeBytes: os.freemem(), totalBytes: os.totalmem() },
+): TranscriptionSafetyIssue | null {
+  const estimatedNeedBytes = estimateWorkingSetBytes(input)
+  const recommendedFreeBytes = Math.max(
+    input.diarizationEnabled ? 10 * GIB : 4 * GIB,
+    Math.ceil(estimatedNeedBytes * 0.75),
+  )
+  const minimumTotalBytes = input.diarizationEnabled ? 16 * GIB : 8 * GIB
+  const currentFreeGiB = roundGiB(memory.freeBytes)
+  const estimatedNeedGiB = roundGiB(estimatedNeedBytes)
+  const recommendedFreeGiB = roundGiB(recommendedFreeBytes)
+
+  if (memory.totalBytes < minimumTotalBytes) {
+    return {
+      reason: `machine has ${roundGiB(memory.totalBytes)} GiB total RAM; this mode expects at least ${roundGiB(minimumTotalBytes)} GiB`,
+      recommendedFreeGiB,
+      currentFreeGiB,
+      estimatedNeedGiB,
+    }
+  }
+
+  if (memory.freeBytes < recommendedFreeBytes) {
+    return {
+      reason: `only ${currentFreeGiB} GiB free; this recording is estimated to need about ${estimatedNeedGiB} GiB of working memory`,
+      recommendedFreeGiB,
+      currentFreeGiB,
+      estimatedNeedGiB,
+    }
+  }
+
+  return null
+}
+
+function runProcess(
+  cmd: string,
+  args: string[],
+  options: {
+    verbose: boolean
+    captureStdout?: boolean
+    env?: Record<string, string>
+    safetyInput?: TranscriptionSafetyInput
+    phaseLabel?: string
+  },
+): Promise<string> {
   return new Promise((resolve, reject) => {
+    const captureStdout = options.captureStdout ?? false
     const proc = spawn(cmd, args, {
-      stdio: ['ignore', 'pipe', verbose ? 'inherit' : 'pipe'],
-      env: { ...process.env, ...env },
+      stdio: ['ignore', captureStdout ? 'pipe' : 'ignore', options.verbose ? 'inherit' : 'pipe'],
+      env: { ...process.env, ...options.env },
     })
 
-    const chunks: Buffer[] = []
-    proc.stdout!.on('data', (chunk: Buffer) => chunks.push(chunk))
+    const stdoutChunks: Buffer[] = []
+    const stderrChunks: Buffer[] = []
+    const thresholds = options.safetyInput ? getRuntimeSafetyThresholds(options.safetyInput) : null
+    const pollMs = Math.max(
+      250,
+      Number.parseInt(process.env.PLAUD_SYNC_MEMORY_POLL_MS ?? `${DEFAULT_MEMORY_POLL_MS}`, 10) || DEFAULT_MEMORY_POLL_MS,
+    )
+    let watchdogReason: string | null = null
+    let settled = false
+    let watchdogTimer: ReturnType<typeof setInterval> | undefined
+
+    if (captureStdout && proc.stdout) {
+      proc.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk))
+    }
+    if (!options.verbose && proc.stderr) {
+      proc.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk))
+    }
+
+    if (thresholds) {
+      watchdogTimer = setInterval(() => {
+        const freeBytes = os.freemem()
+        if (freeBytes >= thresholds.stopFreeBytes || watchdogReason) return
+
+        watchdogReason =
+          `${options.phaseLabel ?? 'transcription'} stopped to protect system memory: ` +
+          `free memory fell to ${roundGiB(freeBytes)} GiB, below the ${thresholds.stopFreeGiB} GiB safety floor ` +
+          `(job estimate ${thresholds.estimatedNeedGiB} GiB)`
+
+        proc.kill('SIGTERM')
+      }, pollMs)
+    }
+
+    const cleanup = () => {
+      if (watchdogTimer) clearInterval(watchdogTimer)
+    }
 
     proc.on('close', (code) => {
-      if (code === 0) resolve(Buffer.concat(chunks).toString())
-      else reject(new Error(`${cmd} ${args[0]} exited with code ${code}`))
+      cleanup()
+      if (settled) return
+      settled = true
+
+      if (watchdogReason) {
+        reject(new Error(watchdogReason))
+        return
+      }
+
+      if (code === 0) {
+        resolve(captureStdout ? Buffer.concat(stdoutChunks).toString() : '')
+        return
+      }
+
+      const stderr = Buffer.concat(stderrChunks).toString().trim()
+      const detail = stderr ? `: ${stderr}` : ''
+      reject(new Error(`${cmd} ${args[0]} exited with code ${code}${detail}`))
     })
-    proc.on('error', reject)
+    proc.on('error', (err) => {
+      cleanup()
+      if (settled) return
+      settled = true
+      reject(err)
+    })
   })
 }
 
@@ -111,6 +266,12 @@ export class Transcriber {
     hooks: TranscribeHooks = {},
   ): Promise<void> {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plaud-sync-'))
+    const audioStats = fs.statSync(audioPath)
+    const safetyInput: TranscriptionSafetyInput = {
+      audioBytes: audioStats.size,
+      durationMs: Math.max(1, Math.ceil(audioStats.size / (32 * 1024))),
+      diarizationEnabled: !noDiarize && Boolean(hfToken),
+    }
     const phaseTimings = {
       transcriptionMs: 0,
       diarizationMs: 0,
@@ -128,8 +289,8 @@ export class Transcriber {
         '--output-format', 'json',
         '--output-dir', tmpDir,
         '--compression-ratio-threshold', '2.0',
-        '--verbose', 'True',
       ]
+      if (verbose) mlxArgs.push('--verbose', 'True')
       if (!noDiarize && hfToken) {
         // Word timestamps needed for accurate speaker merge, also enables hallucination silence detection
         mlxArgs.push('--word-timestamps', 'True', '--hallucination-silence-threshold', '2')
@@ -137,7 +298,13 @@ export class Transcriber {
 
       const hfEnv = hfToken ? { HF_TOKEN: hfToken } : undefined
       const transcriptionStartedAt = Date.now()
-      await runProcess('uvx', mlxArgs, true, hfEnv)
+      await runProcess('uvx', mlxArgs, {
+        verbose,
+        captureStdout: false,
+        env: hfEnv,
+        safetyInput,
+        phaseLabel: 'transcription',
+      })
       phaseTimings.transcriptionMs = Date.now() - transcriptionStartedAt
 
       const baseName = path.basename(audioPath, path.extname(audioPath))
@@ -171,7 +338,13 @@ export class Transcriber {
 
       hooks.onPhaseChange?.('diarizing')
       const diarizationStartedAt = Date.now()
-      const diarizeJson = await runProcess('uv', diarizeArgs, verbose, hfEnv)
+      const diarizeJson = await runProcess('uv', diarizeArgs, {
+        verbose,
+        captureStdout: true,
+        env: hfEnv,
+        safetyInput,
+        phaseLabel: 'diarization',
+      })
       phaseTimings.diarizationMs = Date.now() - diarizationStartedAt
       const diarization = JSON.parse(diarizeJson) as DiarizeSegment[]
 

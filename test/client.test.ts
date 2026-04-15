@@ -103,17 +103,18 @@ describe('PlaudClient', () => {
   })
 
   describe('downloadAudio', () => {
-    it('returns audio as ArrayBuffer', async () => {
+    it('returns the raw response for streaming', async () => {
       const auth = makeAuth()
       const client = new PlaudClient(auth, 'us')
 
-      const audioData = new ArrayBuffer(16)
+      const audioData = new Uint8Array(16)
       spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
         new Response(audioData, { status: 200 }),
       )) as unknown as typeof fetch)
 
       const result = await client.downloadAudio('rec-123')
-      expect(result.byteLength).toBe(16)
+      expect(result.ok).toBe(true)
+      expect(await result.arrayBuffer()).toHaveProperty('byteLength', 16)
     })
 
     it('throws on HTTP error', async () => {

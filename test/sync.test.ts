@@ -25,6 +25,25 @@ function makeRecording(overrides: Partial<PlaudRecording> = {}): PlaudRecording 
   }
 }
 
+function makeStreamingResponse(body: string | Uint8Array) {
+  const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body
+  const arrayBuffer = mock(() => Promise.reject(new Error('arrayBuffer should not be used')))
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes)
+      controller.close()
+    },
+  })
+
+  return {
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    body: stream,
+    arrayBuffer,
+  } as unknown as Response
+}
+
 describe('generateFilename', () => {
   it('formats as YYYY-MM-DD_slug', () => {
     const rec = makeRecording({ filename: 'Team Meeting', start_time: new Date('2026-03-25T10:00:00Z').getTime() })
@@ -46,13 +65,18 @@ describe('generateFilename', () => {
 
 describe('syncRecordings', () => {
   let tmpDir: string
+  let originalBypassValue: string | undefined
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plaud-sync-test-'))
+    originalBypassValue = process.env.PLAUD_SYNC_BYPASS_MEMORY_CHECK
+    process.env.PLAUD_SYNC_BYPASS_MEMORY_CHECK = '1'
   })
 
   afterEach(() => {
     mock.restore()
+    if (originalBypassValue == null) delete process.env.PLAUD_SYNC_BYPASS_MEMORY_CHECK
+    else process.env.PLAUD_SYNC_BYPASS_MEMORY_CHECK = originalBypassValue
     fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
@@ -70,9 +94,8 @@ describe('syncRecordings', () => {
     } as unknown as Transcriber
 
     // Mock fetch for MP3 download
-    spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
-      new Response(new ArrayBuffer(16), { status: 200 }),
-    )) as unknown as typeof fetch)
+    const response = makeStreamingResponse('audio-data')
+    spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(response)) as unknown as typeof fetch)
 
     const summary = await syncRecordings(client, transcriber, tmpDir)
 
@@ -82,6 +105,7 @@ describe('syncRecordings', () => {
     expect(fs.existsSync(transcriptDir)).toBe(true)
     expect(client.getMp3Url).toHaveBeenCalledWith('rec-1')
     expect(transcriber.transcribe).toHaveBeenCalled()
+    expect((response as any).arrayBuffer).not.toHaveBeenCalled()
     expect(fs.readdirSync(audioDir)).toEqual([])
     expect(summary.downloaded).toBe(1)
     expect(summary.transcribed).toBe(1)
@@ -146,7 +170,7 @@ describe('syncRecordings', () => {
     const client: PlaudClient = {
       listRecordings: mock(() => Promise.resolve(recordings)),
       getMp3Url: mock(() => Promise.resolve(null)),
-      downloadAudio: mock(() => Promise.resolve(new ArrayBuffer(16))),
+      downloadAudio: mock(() => Promise.resolve(makeStreamingResponse('opus-data'))),
     } as unknown as PlaudClient
 
     const transcriber: Transcriber = {
@@ -174,7 +198,7 @@ describe('syncRecordings', () => {
     } as unknown as Transcriber
 
     spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
-      new Response(new ArrayBuffer(16), { status: 200 }),
+      makeStreamingResponse('audio-data'),
     )) as unknown as typeof fetch)
 
     await syncRecordings(client, transcriber, tmpDir, { deleteAudioAfterTranscribe: false })
@@ -203,7 +227,7 @@ describe('syncRecordings', () => {
     } as unknown as Transcriber
 
     spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
-      new Response(new ArrayBuffer(16), { status: 200 }),
+      makeStreamingResponse('audio-data'),
     )) as unknown as typeof fetch)
 
     await syncRecordings(client, transcriber, tmpDir)
@@ -234,7 +258,7 @@ describe('syncRecordings', () => {
     } as unknown as Transcriber
 
     spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
-      new Response(new ArrayBuffer(16), { status: 200 }),
+      makeStreamingResponse('audio-data'),
     )) as unknown as typeof fetch)
 
     await syncRecordings(client, transcriber, tmpDir)
@@ -267,7 +291,7 @@ describe('syncRecordings', () => {
     } as unknown as Transcriber
 
     spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
-      new Response(new ArrayBuffer(16), { status: 200 }),
+      makeStreamingResponse('audio-data'),
     )) as unknown as typeof fetch)
 
     await syncRecordings(client, transcriber, tmpDir)
@@ -278,6 +302,41 @@ describe('syncRecordings', () => {
       'download:rec-1',
       'transcribe:1970-01-01_First',
     ])
+  })
+
+  it('prints a batch transcription progress line', async () => {
+    const recordings = [
+      makeRecording({ id: 'rec-1', filename: 'First', start_time: 1000 }),
+      makeRecording({ id: 'rec-2', filename: 'Second', start_time: 2000 }),
+    ]
+
+    const client: PlaudClient = {
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock((id: string) => Promise.resolve(`https://cdn.example.com/${id}.mp3`)),
+      downloadAudio: mock(() => undefined),
+    } as unknown as PlaudClient
+
+    const transcriber: Transcriber = {
+      transcribe: mock(() => Promise.resolve(undefined)),
+    } as unknown as Transcriber
+
+    spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
+      makeStreamingResponse('audio-data'),
+    )) as unknown as typeof fetch)
+
+    const writes: string[] = []
+    const stdoutSpy = spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString())
+      return true
+    }) as typeof process.stdout.write)
+
+    await syncRecordings(client, transcriber, tmpDir, { interactive: false })
+
+    stdoutSpy.mockRestore()
+    const output = writes.join('')
+    expect(output).toContain('100%|')
+    expect(output).toContain('2/2 [')
+    expect(output).toContain('it/s]')
   })
 
   it('filters recordings by since date and limit', async () => {
@@ -301,7 +360,7 @@ describe('syncRecordings', () => {
     } as unknown as Transcriber
 
     spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
-      new Response(new ArrayBuffer(16), { status: 200 }),
+      makeStreamingResponse('audio-data'),
     )) as unknown as typeof fetch)
 
     const summary = await syncRecordings(client, transcriber, tmpDir, {
@@ -330,5 +389,39 @@ describe('syncRecordings', () => {
     expect(client.getMp3Url).not.toHaveBeenCalled()
     expect(transcriber.transcribe).not.toHaveBeenCalled()
     expect(summary.selected).toBe(1)
+  })
+
+  it('blocks risky transcriptions before starting the model', async () => {
+    delete process.env.PLAUD_SYNC_BYPASS_MEMORY_CHECK
+    const recordings = [
+      makeRecording({
+        filesize: 900 * 1024 * 1024,
+        duration: 2 * 60 * 60 * 1000,
+      }),
+    ]
+    const client: PlaudClient = {
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock(() => Promise.resolve('https://cdn.example.com/file.mp3')),
+      downloadAudio: mock(() => undefined),
+    } as unknown as PlaudClient
+    const transcriber: Transcriber = {
+      transcribe: mock(() => Promise.resolve(undefined)),
+    } as unknown as Transcriber
+
+    const response = makeStreamingResponse(new Uint8Array(32))
+    spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(response)) as unknown as typeof fetch)
+    const freeMemSpy = spyOn(os, 'freemem').mockImplementation(() => 6 * 1024 ** 3)
+    const totalMemSpy = spyOn(os, 'totalmem').mockImplementation(() => 16 * 1024 ** 3)
+
+    try {
+      const summary = await syncRecordings(client, transcriber, tmpDir, { hfToken: 'hf-token' })
+
+      expect(transcriber.transcribe).not.toHaveBeenCalled()
+      expect(summary.failed).toBe(1)
+      expect(summary.transcribed).toBe(0)
+    } finally {
+      freeMemSpy.mockRestore()
+      totalMemSpy.mockRestore()
+    }
   })
 })
