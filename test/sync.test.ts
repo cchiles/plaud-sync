@@ -239,4 +239,42 @@ describe('syncRecordings', () => {
 
     expect(processOrder).toEqual(['rec-2', 'rec-1'])
   })
+
+  it('downloads and transcribes each recording before moving to the next', async () => {
+    const recordings = [
+      makeRecording({ id: 'rec-1', filename: 'First', start_time: 1000 }),
+      makeRecording({ id: 'rec-2', filename: 'Second', start_time: 2000 }),
+    ]
+
+    const steps: string[] = []
+
+    const client: PlaudClient = {
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock((id: string) => {
+        steps.push(`download:${id}`)
+        return Promise.resolve(`https://cdn.example.com/${id}.mp3`)
+      }),
+      downloadAudio: mock(() => undefined),
+    } as unknown as PlaudClient
+
+    const transcriber: Transcriber = {
+      transcribe: mock((audioPath: string) => {
+        steps.push(`transcribe:${path.basename(audioPath, path.extname(audioPath))}`)
+        return Promise.resolve(undefined)
+      }),
+    } as unknown as Transcriber
+
+    spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
+      new Response(new ArrayBuffer(16), { status: 200 }),
+    ))
+
+    await syncRecordings(client, transcriber, tmpDir)
+
+    expect(steps).toEqual([
+      'download:rec-2',
+      'transcribe:1970-01-01_Second',
+      'download:rec-1',
+      'transcribe:1970-01-01_First',
+    ])
+  })
 })

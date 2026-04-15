@@ -59,90 +59,130 @@ export async function syncRecordings(
     const sorted = [...recordings].sort((a, b) => b.start_time - a.start_time)
     process.stdout.write(`Found ${sorted.length} recording(s)\n`)
 
-    // Phase 1: Download audio
     let downloaded = 0
+    let transcribed = 0
+    let skipped = 0
+    let failed = 0
     let downloadFailed = 0
-    const audioFiles: { rec: PlaudRecording; audioPath: string; baseName: string }[] = []
+    if (!transcribeOnly && !audioOnly && concurrency > 1) {
+      process.stdout.write('Sequential sync enabled: processing one recording at a time.\n')
+    }
 
-    if (!transcribeOnly) {
-      for (let i = 0; i < sorted.length; i++) {
-        const rec = sorted[i]
-        const baseName = generateFilename(rec)
+    for (let i = 0; i < sorted.length; i++) {
+      const rec = sorted[i]
+      const defaultBaseName = generateFilename(rec)
+      const dbEntry = db.findByRecordingId(rec.id)
+      const baseName = dbEntry?.baseName ?? defaultBaseName
+      const transcriptPath = path.join(transcriptDir, `${baseName}.txt`)
 
-        // Check database first (by recording ID)
-        const dbEntry = db.findByRecordingId(rec.id)
-        if (dbEntry) {
-          const existing = findExistingAudio(audioDir, dbEntry.baseName)
-          if (existing) {
-            // Backfill transcription status if transcript exists on disk
-            if (!db.isTranscribed(rec.id) && fs.existsSync(path.join(transcriptDir, `${dbEntry.baseName}.txt`))) {
-              db.markTranscribed(rec.id)
-            }
-            audioFiles.push({ rec, audioPath: existing, baseName: dbEntry.baseName })
-            continue
-          }
-          if (
-            deleteAudioAfterTranscribe &&
-            !retranscribe &&
-            fs.existsSync(path.join(transcriptDir, `${dbEntry.baseName}.txt`))
-          ) {
-            if (!db.isTranscribed(rec.id)) {
-              db.markTranscribed(rec.id)
-            }
-            continue
-          }
+      let audioPath = findExistingAudio(audioDir, baseName)
+      if (!audioPath && dbEntry && dbEntry.baseName !== baseName) {
+        audioPath = findExistingAudio(audioDir, dbEntry.baseName)
+      }
+
+      if (audioPath && !dbEntry) {
+        db.markDownloaded(rec.id, baseName, path.extname(audioPath).slice(1))
+      }
+
+      if (!db.isTranscribed(rec.id) && fs.existsSync(transcriptPath)) {
+        if (!db.findByRecordingId(rec.id)) {
+          db.markDownloaded(rec.id, baseName, audioPath ? path.extname(audioPath).slice(1) : '')
         }
+        db.markTranscribed(rec.id)
+      }
 
-        // Fall back to filename match on disk
-        const existing = findExistingAudio(audioDir, baseName)
-        if (existing) {
-          db.markDownloaded(rec.id, baseName, path.extname(existing).slice(1))
-          // Backfill transcription status if transcript exists on disk
-          if (fs.existsSync(path.join(transcriptDir, `${baseName}.txt`))) {
-            db.markTranscribed(rec.id)
-          }
-          audioFiles.push({ rec, audioPath: existing, baseName })
-          continue
-        }
-        if (
-          deleteAudioAfterTranscribe &&
-          !retranscribe &&
-          fs.existsSync(path.join(transcriptDir, `${baseName}.txt`))
-        ) {
-          db.markDownloaded(rec.id, baseName, '')
-          db.markTranscribed(rec.id)
+      if (audioOnly) {
+        if (audioPath) {
+          skipped++
           continue
         }
 
         const progress = `[${i + 1}/${sorted.length}]`
         process.stdout.write(`${progress} Downloading ${rec.filename}...`)
         try {
-          const audioPath = await downloadRecording(client, rec.id, audioDir, baseName)
-          const ext = path.extname(audioPath).slice(1)
-          db.markDownloaded(rec.id, baseName, ext)
-          audioFiles.push({ rec, audioPath, baseName })
+          const downloadedPath = await downloadRecording(client, rec.id, audioDir, baseName)
+          db.markDownloaded(rec.id, baseName, path.extname(downloadedPath).slice(1))
           downloaded++
           process.stdout.write(' done\n')
         } catch (err) {
           downloadFailed++
+          failed++
           process.stdout.write(' failed\n')
           const message = err instanceof Error ? err.message : String(err)
           process.stderr.write(`  Error: ${message}\n`)
         }
+        continue
       }
 
-      if (downloaded > 0) {
-        process.stdout.write(`\nDownloaded ${downloaded} recording(s)\n`)
+      if (!retranscribe && db.isTranscribed(rec.id) && !audioPath) {
+        skipped++
+        continue
       }
-    } else {
-      // transcribe-only: use existing audio files on disk
-      for (const rec of sorted) {
-        const dbEntry = db.findByRecordingId(rec.id)
-        const baseName = dbEntry?.baseName ?? generateFilename(rec)
-        const existing = findExistingAudio(audioDir, baseName)
-        if (existing) {
-          audioFiles.push({ rec, audioPath: existing, baseName })
+
+      if (!audioPath) {
+        if (transcribeOnly) {
+          skipped++
+          continue
         }
+
+        const progress = `[${i + 1}/${sorted.length}]`
+        process.stdout.write(`${progress} Downloading ${rec.filename}...`)
+        try {
+          audioPath = await downloadRecording(client, rec.id, audioDir, baseName)
+          db.markDownloaded(rec.id, baseName, path.extname(audioPath).slice(1))
+          downloaded++
+          process.stdout.write(' done\n')
+        } catch (err) {
+          downloadFailed++
+          failed++
+          process.stdout.write(' failed\n')
+          const message = err instanceof Error ? err.message : String(err)
+          process.stderr.write(`  Error: ${message}\n`)
+          continue
+        }
+      }
+
+      if (!retranscribe && db.isTranscribed(rec.id) && fs.existsSync(transcriptPath)) {
+        skipped++
+        continue
+      }
+
+      const start = Date.now()
+      const timer = verbose ? null : setInterval(() => {
+        const elapsed = Math.floor((Date.now() - start) / 1000)
+        process.stdout.write(`\r  [${i + 1}/${sorted.length}] ${rec.filename} (${elapsed}s)`)
+      }, 1000)
+      if (verbose) {
+        process.stdout.write(`  [${i + 1}/${sorted.length}] ${rec.filename}\n`)
+      } else {
+        process.stdout.write(`  [${i + 1}/${sorted.length}] ${rec.filename} (0s)`)
+      }
+
+      try {
+        await transcriber.transcribe(audioPath, transcriptPath, hfToken, verbose, noDiarize)
+        db.markTranscribed(rec.id)
+        if (deleteAudioAfterTranscribe && fs.existsSync(audioPath)) {
+          fs.unlinkSync(audioPath)
+        }
+        transcribed++
+        if (timer) clearInterval(timer)
+        const elapsed = Math.floor((Date.now() - start) / 1000)
+        if (verbose) {
+          process.stdout.write(`  [${i + 1}/${sorted.length}] ${rec.filename} done (${elapsed}s)\n`)
+        } else {
+          process.stdout.write(`\r  [${i + 1}/${sorted.length}] ${rec.filename} done (${elapsed}s)\n`)
+        }
+      } catch (err) {
+        failed++
+        if (timer) clearInterval(timer)
+        const elapsed = Math.floor((Date.now() - start) / 1000)
+        if (verbose) {
+          process.stdout.write(`  [${i + 1}/${sorted.length}] ${rec.filename} failed (${elapsed}s)\n`)
+        } else {
+          process.stdout.write(`\r  [${i + 1}/${sorted.length}] ${rec.filename} failed (${elapsed}s)\n`)
+        }
+        const message = err instanceof Error ? err.message : String(err)
+        process.stderr.write(`    Error: ${message}\n`)
       }
     }
 
@@ -151,79 +191,7 @@ export async function syncRecordings(
       return
     }
 
-    // Phase 2: Transcribe
-    const needsTranscription = retranscribe
-      ? audioFiles
-      : audioFiles.filter(
-          ({ rec, baseName }) =>
-            !db.isTranscribed(rec.id) && !fs.existsSync(path.join(transcriptDir, `${baseName}.txt`)),
-        )
-
-    let transcribed = 0
-    let transcribeFailed = 0
-    const total = needsTranscription.length
-
-    if (total > 0) {
-      process.stdout.write(`\nTranscribing ${total} recording(s) (${concurrency} parallel)...\n`)
-    }
-
-    let nextIndex = 0
-    let completed = 0
-
-    async function worker(): Promise<void> {
-      while (nextIndex < total) {
-        const i = nextIndex++
-        const { rec, audioPath, baseName } = needsTranscription[i]
-        const transcriptPath = path.join(transcriptDir, `${baseName}.txt`)
-
-        const start = Date.now()
-        const timer = verbose ? null : setInterval(() => {
-          const elapsed = Math.floor((Date.now() - start) / 1000)
-          process.stdout.write(`\r  [${completed + 1}/${total}] ${rec.filename} (${elapsed}s)`)
-        }, 1000)
-        if (verbose) {
-          process.stdout.write(`  [${completed + 1}/${total}] ${rec.filename}\n`)
-        } else {
-          process.stdout.write(`  [${completed + 1}/${total}] ${rec.filename} (0s)`)
-        }
-        try {
-          await transcriber.transcribe(audioPath, transcriptPath, hfToken, verbose, noDiarize)
-          db.markTranscribed(rec.id)
-          if (deleteAudioAfterTranscribe && fs.existsSync(audioPath)) {
-            fs.unlinkSync(audioPath)
-          }
-          if (timer) clearInterval(timer)
-          const elapsed = Math.floor((Date.now() - start) / 1000)
-          transcribed++
-          completed++
-          if (verbose) {
-            process.stdout.write(`  [${completed}/${total}] ${rec.filename} done (${elapsed}s)\n`)
-          } else {
-            process.stdout.write(`\r  [${completed}/${total}] ${rec.filename} done (${elapsed}s)\n`)
-          }
-        } catch (err) {
-          if (timer) clearInterval(timer)
-          const elapsed = Math.floor((Date.now() - start) / 1000)
-          transcribeFailed++
-          completed++
-          if (verbose) {
-            process.stdout.write(`  [${completed}/${total}] ${rec.filename} failed (${elapsed}s)\n`)
-          } else {
-            process.stdout.write(`\r  [${completed}/${total}] ${rec.filename} failed (${elapsed}s)\n`)
-          }
-          const message = err instanceof Error ? err.message : String(err)
-          process.stderr.write(`    Error: ${message}\n`)
-        }
-      }
-    }
-
-    const workers = Array.from({ length: Math.min(concurrency, total) }, () => worker())
-    await Promise.all(workers)
-
-    const skipped = sorted.length - downloaded - downloadFailed - needsTranscription.length + transcribed + transcribeFailed
-    process.stdout.write(
-      `\nDone: ${downloaded} downloaded, ${transcribed} transcribed, ${skipped} skipped, ${downloadFailed + transcribeFailed} failed\n`,
-    )
+    process.stdout.write(`\nDone: ${downloaded} downloaded, ${transcribed} transcribed, ${skipped} skipped, ${failed} failed\n`)
   } finally {
     db.close()
   }

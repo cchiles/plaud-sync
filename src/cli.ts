@@ -233,7 +233,7 @@ function uninstallCommand(): void {
   process.stdout.write('LaunchAgent uninstalled.\n')
 }
 
-const USAGE = `plaud-sync v0.2.9
+const USAGE = `plaud-sync v0.2.10
 
 Usage: plaud-sync <command> [options]
 
