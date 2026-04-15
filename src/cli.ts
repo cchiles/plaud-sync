@@ -108,6 +108,7 @@ interface SyncFlags {
   verbose: boolean
   noDiarize: boolean
   retranscribe: boolean
+  keepAudio: boolean
 }
 
 async function syncCommand(folder: string, flags: SyncFlags): Promise<void> {
@@ -146,6 +147,7 @@ async function syncCommand(folder: string, flags: SyncFlags): Promise<void> {
     verbose: flags.verbose,
     noDiarize: flags.noDiarize,
     retranscribe: flags.retranscribe,
+    deleteAudioAfterTranscribe: !flags.keepAudio,
   })
 }
 
@@ -231,7 +233,7 @@ function uninstallCommand(): void {
   process.stdout.write('LaunchAgent uninstalled.\n')
 }
 
-const USAGE = `plaud-sync v0.1.0
+const USAGE = `plaud-sync v0.2.9
 
 Usage: plaud-sync <command> [options]
 
@@ -244,6 +246,7 @@ Commands:
     --verbose                      Show transcription output
     --no-diarize                   Skip speaker diarization
     --retranscribe                 Re-transcribe all recordings
+    --keep-audio                   Keep downloaded audio after successful transcription
   install [folder] [--interval]  Install launchd agent (default: 30 min)
   uninstall                      Remove launchd agent`
 
@@ -261,6 +264,7 @@ export async function run(args: string[]): Promise<void> {
       let verbose = false
       let noDiarize = false
       let retranscribe = false
+      let keepAudio = false
       const syncArgs = args.slice(1)
       for (let i = 0; i < syncArgs.length; i++) {
         if (syncArgs[i] === '--concurrency' && syncArgs[i + 1]) {
@@ -276,11 +280,13 @@ export async function run(args: string[]): Promise<void> {
           noDiarize = true
         } else if (syncArgs[i] === '--retranscribe') {
           retranscribe = true
+        } else if (syncArgs[i] === '--keep-audio') {
+          keepAudio = true
         } else {
           folder = syncArgs[i]
         }
       }
-      return syncCommand(folder, { concurrency, audioOnly, transcribeOnly, verbose, noDiarize, retranscribe })
+      return syncCommand(folder, { concurrency, audioOnly, transcribeOnly, verbose, noDiarize, retranscribe, keepAudio })
     }
     case 'install':
       return installCommand(args.slice(1))

@@ -82,6 +82,7 @@ describe('syncRecordings', () => {
     expect(fs.existsSync(transcriptDir)).toBe(true)
     expect(client.getMp3Url).toHaveBeenCalledWith('rec-1')
     expect(transcriber.transcribe).toHaveBeenCalled()
+    expect(fs.readdirSync(audioDir)).toEqual([])
   })
 
   it('skips recordings that already have audio files', async () => {
@@ -154,8 +155,31 @@ describe('syncRecordings', () => {
 
     expect(client.downloadAudio).toHaveBeenCalledWith('rec-1')
     const audioDir = path.join(tmpDir, 'audio')
+    expect(fs.readdirSync(audioDir)).toEqual([])
+  })
+
+  it('keeps audio after successful transcription when requested', async () => {
+    const recordings = [makeRecording()]
+
+    const client: PlaudClient = {
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock(() => Promise.resolve('https://cdn.example.com/file.mp3')),
+      downloadAudio: mock(() => undefined),
+    } as unknown as PlaudClient
+
+    const transcriber: Transcriber = {
+      transcribe: mock(() => Promise.resolve(undefined)),
+    } as unknown as Transcriber
+
+    spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(
+      new Response(new ArrayBuffer(16), { status: 200 }),
+    ))
+
+    await syncRecordings(client, transcriber, tmpDir, { deleteAudioAfterTranscribe: false })
+
+    const audioDir = path.join(tmpDir, 'audio')
     const files = fs.readdirSync(audioDir)
-    expect(files.some((f) => f.endsWith('.opus'))).toBe(true)
+    expect(files.some((f) => f.endsWith('.mp3'))).toBe(true)
   })
 
   it('continues to next recording when one fails', async () => {

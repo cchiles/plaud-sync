@@ -27,6 +27,7 @@ export interface SyncOptions {
   verbose?: boolean
   noDiarize?: boolean
   retranscribe?: boolean
+  deleteAudioAfterTranscribe?: boolean
 }
 
 export async function syncRecordings(
@@ -35,7 +36,16 @@ export async function syncRecordings(
   outputFolder: string,
   options: SyncOptions = {},
 ): Promise<void> {
-  const { hfToken, concurrency = 1, audioOnly = false, transcribeOnly = false, verbose = false, noDiarize = false, retranscribe = false } = options
+  const {
+    hfToken,
+    concurrency = 1,
+    audioOnly = false,
+    transcribeOnly = false,
+    verbose = false,
+    noDiarize = false,
+    retranscribe = false,
+    deleteAudioAfterTranscribe = true,
+  } = options
   const audioDir = path.join(outputFolder, 'audio')
   const transcriptDir = path.join(outputFolder, 'transcripts')
   fs.mkdirSync(audioDir, { recursive: true })
@@ -71,6 +81,16 @@ export async function syncRecordings(
             audioFiles.push({ rec, audioPath: existing, baseName: dbEntry.baseName })
             continue
           }
+          if (
+            deleteAudioAfterTranscribe &&
+            !retranscribe &&
+            fs.existsSync(path.join(transcriptDir, `${dbEntry.baseName}.txt`))
+          ) {
+            if (!db.isTranscribed(rec.id)) {
+              db.markTranscribed(rec.id)
+            }
+            continue
+          }
         }
 
         // Fall back to filename match on disk
@@ -82,6 +102,15 @@ export async function syncRecordings(
             db.markTranscribed(rec.id)
           }
           audioFiles.push({ rec, audioPath: existing, baseName })
+          continue
+        }
+        if (
+          deleteAudioAfterTranscribe &&
+          !retranscribe &&
+          fs.existsSync(path.join(transcriptDir, `${baseName}.txt`))
+        ) {
+          db.markDownloaded(rec.id, baseName, '')
+          db.markTranscribed(rec.id)
           continue
         }
 
@@ -160,6 +189,9 @@ export async function syncRecordings(
         try {
           await transcriber.transcribe(audioPath, transcriptPath, hfToken, verbose, noDiarize)
           db.markTranscribed(rec.id)
+          if (deleteAudioAfterTranscribe && fs.existsSync(audioPath)) {
+            fs.unlinkSync(audioPath)
+          }
           if (timer) clearInterval(timer)
           const elapsed = Math.floor((Date.now() - start) / 1000)
           transcribed++
