@@ -74,29 +74,32 @@ function formatDateOnly(timestamp: number): string {
   return new Date(timestamp).toISOString().slice(0, 10)
 }
 
-function formatClockDuration(ms: number): string {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
-  const hours = Math.floor(totalSeconds / 3600)
-  const minutes = Math.floor((totalSeconds % 3600) / 60)
-  const seconds = totalSeconds % 60
-
-  if (hours > 0) {
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
-  }
-
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
-}
-
-function formatItemsPerSecond(rate: number): string {
-  if (!Number.isFinite(rate) || rate <= 0) return '0.00it/s'
-  return `${rate.toFixed(2)}it/s`
-}
-
 function renderProgressBar(completed: number, total: number, width = 40): string {
   const safeTotal = Math.max(total, 1)
   const ratio = Math.max(0, Math.min(1, completed / safeTotal))
   const filled = Math.round(ratio * width)
   return `${'█'.repeat(filled)}${' '.repeat(width - filled)}`
+}
+
+function getPhaseProgress(phase: SyncPhase): { completed: number; total: number } {
+  switch (phase) {
+    case 'queued':
+      return { completed: 0, total: 4 }
+    case 'downloading':
+      return { completed: 1, total: 4 }
+    case 'downloaded':
+      return { completed: 2, total: 4 }
+    case 'transcribing':
+      return { completed: 2, total: 4 }
+    case 'diarizing':
+      return { completed: 3, total: 4 }
+    case 'writing transcript':
+      return { completed: 3, total: 4 }
+    case 'done':
+    case 'failed':
+    case 'skipped':
+      return { completed: 4, total: 4 }
+  }
 }
 
 function parseResultLabel(args: {
@@ -134,9 +137,6 @@ class ProgressReporter {
   private completed = 0
   private skipped = 0
   private failed = 0
-  private transcriptionTotal = 0
-  private transcriptionCompleted = 0
-  private transcriptionStartedAt?: number
 
   constructor(options: { interactive: boolean; verbose: boolean; heartbeatMs: number }) {
     this.interactive = options.interactive
@@ -168,12 +168,6 @@ class ProgressReporter {
     )
 
     this.startLiveUpdates()
-  }
-
-  setTranscriptionPlan(total: number): void {
-    this.transcriptionTotal = Math.max(0, total)
-    this.transcriptionCompleted = 0
-    this.transcriptionStartedAt = total > 0 ? Date.now() : undefined
   }
 
   queue(index: number, total: number, name: string): void {
@@ -209,10 +203,6 @@ class ProgressReporter {
     else if (result.skipped) this.skipped += 1
     else this.completed += 1
 
-    if (result.countedTranscription) {
-      this.transcriptionCompleted = Math.min(this.transcriptionCompleted + 1, this.transcriptionTotal)
-    }
-
     const detailParts = [`elapsed=${formatDuration(result.durationMs)}`]
     if (this.verbose && result.timings) {
       detailParts.push(`transcribe=${formatDuration(result.timings.transcriptionMs)}`)
@@ -230,9 +220,9 @@ class ProgressReporter {
 
   heartbeat(): void {
     if (!this.current) return
-    const remaining = Math.max(0, this.current.total - (this.completed + this.skipped + this.failed))
+    const remaining = Math.max(0, this.current.total - (this.completed + this.failed))
     this.line(
-      `Heartbeat: completed=${this.completed}, skipped=${this.skipped}, failed=${this.failed}, remaining=${remaining}, current="${this.current.name}" (${this.current.phase}), elapsed=${formatDuration(Date.now() - this.runStartedAt)}`,
+      `Heartbeat: completed=${this.completed}, failed=${this.failed}, remaining=${remaining}, current="${this.current.name}" (${this.current.phase}), elapsed=${formatDuration(Date.now() - this.runStartedAt)}`,
     )
   }
 
@@ -242,11 +232,8 @@ class ProgressReporter {
 
   finish(summary: SyncRunSummary): void {
     this.stopLiveUpdates()
-    if (this.transcriptionTotal > 0) {
-      this.line(this.renderTranscriptionProgress(true))
-    }
     this.line(
-      `Done: scanned=${summary.scanned}, selected=${summary.selected}, downloaded=${summary.downloaded}, transcribed=${summary.transcribed}, skipped=${summary.skipped}, failed=${summary.failed}, wall=${formatDuration(summary.wallTimeMs)}${summary.stoppedEarly ? ', stopped-early=yes' : ''}`,
+      `Done: scanned=${summary.scanned}, selected=${summary.selected}, downloaded=${summary.downloaded}, transcribed=${summary.transcribed}, failed=${summary.failed}, wall=${formatDuration(summary.wallTimeMs)}${summary.stoppedEarly ? ', stopped-early=yes' : ''}`,
     )
   }
 
@@ -271,10 +258,12 @@ class ProgressReporter {
   private renderFooter(): void {
     if (!this.interactive || this.verbose || !this.current) return
     const elapsed = formatDuration(Date.now() - this.current.startedAt)
-    const footer = this.transcriptionTotal > 0
-      ? `${this.renderTranscriptionProgress()} current=${this.current.name} [${this.current.phase}] item-elapsed=${elapsed}`
-      : `Current ${this.current.index}/${this.current.total}: ${this.current.name} ` +
-        `[${this.current.phase}] elapsed=${elapsed} completed=${this.completed} skipped=${this.skipped} failed=${this.failed}`
+    const phaseProgress = getPhaseProgress(this.current.phase)
+    const percent = Math.round((phaseProgress.completed / Math.max(phaseProgress.total, 1)) * 100)
+    const footer =
+      `${String(percent).padStart(3, ' ')}%|${renderProgressBar(phaseProgress.completed, phaseProgress.total)}| ` +
+      `[${this.current.index}/${this.current.total}] ${this.current.name} [${this.current.phase}] ` +
+      `elapsed=${elapsed} completed=${this.completed} failed=${this.failed}`
     process.stdout.write(`\r\x1b[2K${footer}`)
   }
 
@@ -286,21 +275,6 @@ class ProgressReporter {
     if (this.interactive && !this.verbose && this.current) {
       this.renderFooter()
     }
-  }
-
-  private renderTranscriptionProgress(final = false): string {
-    const total = this.transcriptionTotal
-    const completed = final ? total : this.transcriptionCompleted
-    const percent = total === 0 ? 100 : Math.round((completed / total) * 100)
-    const elapsedMs = this.transcriptionStartedAt ? Date.now() - this.transcriptionStartedAt : 0
-    const rate = elapsedMs > 0 ? completed / (elapsedMs / 1000) : 0
-    const remaining = Math.max(0, total - completed)
-    const etaMs = rate > 0 ? (remaining / rate) * 1000 : 0
-
-    return (
-      `${String(percent).padStart(3, ' ')}%|${renderProgressBar(completed, total)}| ` +
-      `${completed}/${total} [${formatClockDuration(elapsedMs)}<${formatClockDuration(etaMs)}, ${formatItemsPerSecond(rate)}]`
-    )
   }
 }
 
@@ -328,41 +302,33 @@ function selectRecordings(
   return selected
 }
 
-function countPlannedTranscriptions(
-  recordings: PlaudRecording[],
+function shouldSkipRecording(
+  rec: PlaudRecording,
   outputFolder: string,
   options: Pick<SyncOptions, 'audioOnly' | 'transcribeOnly' | 'retranscribe' | 'dryRun'>,
   db: SyncDb,
-): number {
-  if (options.audioOnly || options.dryRun) return 0
-
+): boolean {
   const audioDir = path.join(outputFolder, 'audio')
   const transcriptDir = path.join(outputFolder, 'transcripts')
+  const defaultBaseName = generateFilename(rec)
+  const dbEntry = db.findByRecordingId(rec.id)
+  const baseName = dbEntry?.baseName ?? defaultBaseName
+  const transcriptPath = path.join(transcriptDir, `${baseName}.txt`)
 
-  let total = 0
-
-  for (const rec of recordings) {
-    const defaultBaseName = generateFilename(rec)
-    const dbEntry = db.findByRecordingId(rec.id)
-    const baseName = dbEntry?.baseName ?? defaultBaseName
-    const transcriptPath = path.join(transcriptDir, `${baseName}.txt`)
-
-    let audioPath = findExistingAudio(audioDir, baseName)
-    if (!audioPath && dbEntry && dbEntry.baseName !== baseName) {
-      audioPath = findExistingAudio(audioDir, dbEntry.baseName)
-    }
-
-    const hasTranscript = fs.existsSync(transcriptPath)
-    const isMarkedTranscribed = db.isTranscribed(rec.id)
-
-    if (!options.retranscribe && hasTranscript) continue
-    if (!options.retranscribe && isMarkedTranscribed && !audioPath) continue
-    if (options.transcribeOnly && !audioPath) continue
-
-    total += 1
+  let audioPath = findExistingAudio(audioDir, baseName)
+  if (!audioPath && dbEntry && dbEntry.baseName !== baseName) {
+    audioPath = findExistingAudio(audioDir, dbEntry.baseName)
   }
 
-  return total
+  const hasTranscript = fs.existsSync(transcriptPath)
+  const isMarkedTranscribed = db.isTranscribed(rec.id)
+
+  if (options.audioOnly) return Boolean(audioPath)
+  if (options.transcribeOnly && !audioPath) return true
+  if (!options.retranscribe && hasTranscript) return true
+  if (!options.retranscribe && isMarkedTranscribed && !audioPath) return true
+
+  return false
 }
 
 export async function syncRecordings(
@@ -407,17 +373,18 @@ export async function syncRecordings(
   try {
     const recordings = await client.listRecordings()
     const selected = selectRecordings(recordings, { recordingOrder, since, limit })
-    const plannedTranscriptions = countPlannedTranscriptions(selected, outputFolder, {
+    const actionable = selected.filter((rec) => !shouldSkipRecording(rec, outputFolder, {
       audioOnly,
       transcribeOnly,
       retranscribe,
       dryRun,
-    }, db)
+    }, db))
+    skipped = selected.length - actionable.length
 
     reporter.startHeader({
       outputFolder,
       totalFetched: recordings.length,
-      selected: selected.length,
+      selected: actionable.length,
       limit,
       since,
       diarizationEnabled,
@@ -426,17 +393,16 @@ export async function syncRecordings(
       recordingOrder,
       dryRun,
     })
-    reporter.setTranscriptionPlan(plannedTranscriptions)
 
-    for (let i = 0; i < selected.length; i++) {
+    for (let i = 0; i < actionable.length; i++) {
       if (deadline && Date.now() >= deadline) {
         stoppedEarly = true
         reporter.noteStoppedEarly(`Runtime cap reached after ${maxRuntimeMinutes} minute(s). Stopping cleanly.`)
         break
       }
 
-      const rec = selected[i]
-      reporter.queue(i + 1, selected.length, rec.filename)
+      const rec = actionable[i]
+      reporter.queue(i + 1, actionable.length, rec.filename)
 
       const itemStartedAt = Date.now()
       const defaultBaseName = generateFilename(rec)
@@ -471,41 +437,23 @@ export async function syncRecordings(
         (retranscribe || !db.isTranscribed(rec.id) || Boolean(audioPath))
 
       if (dryRun) {
-        let label = 'skipped existing transcript'
-        let resultSkipped = true
+        let label = 'would transcribe existing audio'
         if (audioOnly && !audioPath) {
           label = 'would download'
-          resultSkipped = false
         } else if (transcribeOnly && audioPath && !alreadyTranscribed) {
           label = 'would transcribe existing audio'
-          resultSkipped = false
         } else if (!audioOnly && !transcribeOnly) {
           if (!audioPath) label = 'would download + transcribe'
-          else if (!alreadyTranscribed || retranscribe) label = 'would transcribe existing audio'
-          else label = 'skipped existing transcript'
-          resultSkipped = label.startsWith('skipped')
+          else label = 'would transcribe existing audio'
         }
-        if (resultSkipped) skipped += 1
         reporter.result({
           label,
           durationMs: Date.now() - itemStartedAt,
-          skipped: resultSkipped,
         })
         continue
       }
 
       if (audioOnly) {
-        if (audioPath) {
-          skipped += 1
-          reporter.phase('skipped')
-          reporter.result({
-            label: 'skipped existing audio',
-            durationMs: Date.now() - itemStartedAt,
-            skipped: true,
-          })
-          continue
-        }
-
         reporter.phase('downloading')
         try {
           const downloadedPath = await downloadRecording(client, rec.id, audioDir, baseName)
@@ -528,30 +476,8 @@ export async function syncRecordings(
         continue
       }
 
-      if (!retranscribe && db.isTranscribed(rec.id) && !audioPath) {
-        skipped += 1
-        reporter.phase('skipped')
-        reporter.result({
-          label: 'skipped existing transcript',
-          durationMs: Date.now() - itemStartedAt,
-          skipped: true,
-        })
-        continue
-      }
-
       let downloadedThisRun = false
       if (!audioPath) {
-        if (transcribeOnly) {
-          skipped += 1
-          reporter.phase('skipped')
-          reporter.result({
-            label: 'skipped missing audio',
-            durationMs: Date.now() - itemStartedAt,
-            skipped: true,
-          })
-          continue
-        }
-
         reporter.phase('downloading')
         try {
           audioPath = await downloadRecording(client, rec.id, audioDir, baseName)
@@ -569,17 +495,6 @@ export async function syncRecordings(
           })
           continue
         }
-      }
-
-      if (!retranscribe && db.isTranscribed(rec.id) && fs.existsSync(transcriptPath)) {
-        skipped += 1
-        reporter.phase('skipped')
-        reporter.result({
-          label: 'skipped existing transcript',
-          durationMs: Date.now() - itemStartedAt,
-          skipped: true,
-        })
-        continue
       }
 
       const audioBytes = audioPath && fs.existsSync(audioPath)
@@ -666,7 +581,7 @@ export async function syncRecordings(
 
     const summary: SyncRunSummary = {
       scanned: recordings.length,
-      selected: selected.length,
+      selected: actionable.length,
       downloaded,
       transcribed,
       skipped,

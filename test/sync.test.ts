@@ -309,7 +309,7 @@ describe('syncRecordings', () => {
     ])
   })
 
-  it('prints a batch transcription progress line', async () => {
+  it('shows actionable counts without batch throughput output', async () => {
     const recordings = [
       makeRecording({ id: 'rec-1', filename: 'First', start_time: 1000 }),
       makeRecording({ id: 'rec-2', filename: 'Second', start_time: 2000 }),
@@ -329,6 +329,10 @@ describe('syncRecordings', () => {
       makeStreamingResponse('audio-data'),
     )) as unknown as typeof fetch)
 
+    const transcriptDir = path.join(tmpDir, 'transcripts')
+    fs.mkdirSync(transcriptDir, { recursive: true })
+    fs.writeFileSync(path.join(transcriptDir, '1970-01-01_First.txt'), 'existing')
+
     const writes: string[] = []
     const stdoutSpy = spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
       writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString())
@@ -339,9 +343,9 @@ describe('syncRecordings', () => {
 
     stdoutSpy.mockRestore()
     const output = writes.join('')
-    expect(output).toContain('100%|')
-    expect(output).toContain('2/2 [')
-    expect(output).toContain('it/s]')
+    expect(output).toContain('Selected: 1 recording(s)')
+    expect(output).not.toContain('skipped=')
+    expect(output).not.toContain('it/s]')
   })
 
   it('filters recordings by since date and limit', async () => {
