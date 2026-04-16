@@ -191,7 +191,9 @@ describe('Transcriber', () => {
     totalmemSpy.mockImplementation(() => 32 * 1024 ** 3)
 
     const previousPoll = process.env.PLAUD_SYNC_MEMORY_POLL_MS
+    const previousSnapshotMode = process.env.PLAUD_SYNC_MEMORY_SNAPSHOT_MODE
     process.env.PLAUD_SYNC_MEMORY_POLL_MS = '10'
+    process.env.PLAUD_SYNC_MEMORY_SNAPSHOT_MODE = 'raw'
 
     let killCalled = false
     const spy = spyOn(child_process, 'spawn').mockImplementation(((_cmd: string, _args: string[]) => {
@@ -218,6 +220,8 @@ describe('Transcriber', () => {
       totalmemSpy.mockRestore()
       if (previousPoll == null) delete process.env.PLAUD_SYNC_MEMORY_POLL_MS
       else process.env.PLAUD_SYNC_MEMORY_POLL_MS = previousPoll
+      if (previousSnapshotMode == null) delete process.env.PLAUD_SYNC_MEMORY_SNAPSHOT_MODE
+      else process.env.PLAUD_SYNC_MEMORY_SNAPSHOT_MODE = previousSnapshotMode
       if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath)
       if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath)
     }
