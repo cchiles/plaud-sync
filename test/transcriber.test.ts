@@ -180,6 +180,50 @@ describe('Transcriber', () => {
     }
   })
 
+  it('tolerates NaN values in whisper json output', async () => {
+    const spy = spyOn(child_process, 'spawn').mockImplementation(((_cmd: string, args: string[]) => {
+      const emitter = new EventEmitter() as any
+      emitter.stdout = new EventEmitter()
+      emitter.stderr = new EventEmitter()
+
+      const outDirIdx = args.indexOf('--output-dir')
+      if (outDirIdx !== -1) {
+        const outDir = args[outDirIdx + 1]
+        const audioArg = args.find((value) => value.endsWith('.mp3'))!
+        const baseName = path.basename(audioArg, '.mp3')
+        fs.mkdirSync(outDir, { recursive: true })
+        fs.writeFileSync(
+          path.join(outDir, `${baseName}.json`),
+          JSON.stringify({
+            text: 'Hello there.',
+            segments: [
+              { id: 0, start: 0, end: 2, text: ' Hello there.' },
+            ],
+          }).replace('"start":0', '"start":NaN'),
+        )
+      }
+      setTimeout(() => emitter.emit('close', 0), 0)
+
+      return emitter
+    }) as any)
+
+    const audioPath = path.join(os.tmpdir(), `plaud-test-${Date.now()}.mp3`)
+    const outputPath = path.join(os.tmpdir(), `plaud-test-${Date.now()}.txt`)
+    fs.writeFileSync(audioPath, Buffer.alloc(1024))
+
+    try {
+      const transcriber = new Transcriber()
+      await transcriber.transcribe(audioPath, outputPath, undefined, false, true)
+
+      const result = fs.readFileSync(outputPath, 'utf-8')
+      expect(result).toBe('\n')
+    } finally {
+      spy.mockRestore()
+      if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath)
+      if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath)
+    }
+  })
+
   it('stops a running transcription when free memory drops too low', async () => {
     const audioPath = path.join(os.tmpdir(), `plaud-test-audio-${Date.now()}.mp3`)
     const outputPath = path.join(os.tmpdir(), `plaud-test-output-${Date.now()}.txt`)

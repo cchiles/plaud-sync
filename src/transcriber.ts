@@ -103,6 +103,81 @@ function roundGiB(bytes: number): number {
   return Math.round(toGiB(bytes) * 10) / 10
 }
 
+function isJsonTokenBoundary(char: string | undefined): boolean {
+  return char == null || /[\s,[\]{}:]/.test(char)
+}
+
+function normalizeNonFiniteJsonNumbers(raw: string): string {
+  let normalized = ''
+  let inString = false
+  let escaped = false
+
+  for (let i = 0; i < raw.length; i++) {
+    const current = raw[i]
+
+    if (inString) {
+      normalized += current
+      if (escaped) {
+        escaped = false
+      } else if (current === '\\') {
+        escaped = true
+      } else if (current === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (current === '"') {
+      inString = true
+      normalized += current
+      continue
+    }
+
+    if (raw.startsWith('-Infinity', i) && isJsonTokenBoundary(raw[i - 1]) && isJsonTokenBoundary(raw[i + 9])) {
+      normalized += 'null'
+      i += 8
+      continue
+    }
+
+    if (raw.startsWith('Infinity', i) && isJsonTokenBoundary(raw[i - 1]) && isJsonTokenBoundary(raw[i + 8])) {
+      normalized += 'null'
+      i += 7
+      continue
+    }
+
+    if (raw.startsWith('NaN', i) && isJsonTokenBoundary(raw[i - 1]) && isJsonTokenBoundary(raw[i + 3])) {
+      normalized += 'null'
+      i += 2
+      continue
+    }
+
+    normalized += current
+  }
+
+  return normalized
+}
+
+function parsePossiblyNonFiniteJson<T>(raw: string): T {
+  return JSON.parse(normalizeNonFiniteJsonNumbers(raw)) as T
+}
+
+function sanitizeWhisperSegments(segments: MlxWhisperSegment[]): MlxWhisperSegment[] {
+  return segments.filter((segment) =>
+    Number.isFinite(segment.start) &&
+    Number.isFinite(segment.end) &&
+    typeof segment.text === 'string',
+  )
+}
+
+function sanitizeDiarizationSegments(segments: DiarizeSegment[]): DiarizeSegment[] {
+  return segments.filter((segment) =>
+    Number.isFinite(segment.start) &&
+    Number.isFinite(segment.end) &&
+    typeof segment.speaker === 'string' &&
+    segment.speaker.length > 0,
+  )
+}
+
 export function parseMacOSVmStatSnapshot(output: string, totalBytes: number): MemorySnapshot | null {
   const pageSizeMatch = output.match(/page size of (\d+) bytes/i)
   if (!pageSizeMatch) return null
@@ -381,7 +456,8 @@ export class Transcriber {
         )
       }
       const raw = fs.readFileSync(jsonPath, 'utf-8')
-      const data = JSON.parse(raw) as { segments: MlxWhisperSegment[] }
+      const data = parsePossiblyNonFiniteJson<{ segments: MlxWhisperSegment[] }>(raw)
+      data.segments = sanitizeWhisperSegments(data.segments ?? [])
 
       if (noDiarize || !hfToken) {
         // No diarization — format without speaker labels
@@ -417,7 +493,9 @@ export class Transcriber {
         phaseLabel: 'diarization',
       })
       phaseTimings.diarizationMs = Date.now() - diarizationStartedAt
-      const diarization = JSON.parse(diarizeJson) as DiarizeSegment[]
+      const diarization = sanitizeDiarizationSegments(
+        parsePossiblyNonFiniteJson<DiarizeSegment[]>(diarizeJson),
+      )
 
       // Merge and format
       const merged = assignSpeakers(data.segments, diarization)
