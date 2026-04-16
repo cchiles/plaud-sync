@@ -81,6 +81,45 @@ function renderProgressBar(completed: number, total: number, width = 40): string
   return `${'█'.repeat(filled)}${' '.repeat(width - filled)}`
 }
 
+function truncateMiddle(value: string, maxLength: number): string {
+  if (maxLength <= 0) return ''
+  if (value.length <= maxLength) return value
+  if (maxLength <= 3) return '.'.repeat(maxLength)
+
+  const remaining = maxLength - 3
+  const left = Math.ceil(remaining / 2)
+  const right = Math.floor(remaining / 2)
+  return `${value.slice(0, left)}...${value.slice(value.length - right)}`
+}
+
+function formatFooterLine(args: {
+  columns?: number
+  completed: number
+  failed: number
+  phase: SyncPhase
+  index: number
+  total: number
+  name: string
+  elapsed: string
+}): string {
+  const phaseProgress = getPhaseProgress(args.phase)
+  const percent = Math.round((phaseProgress.completed / Math.max(phaseProgress.total, 1)) * 100)
+  const bar = `${String(percent).padStart(3, ' ')}%|${renderProgressBar(phaseProgress.completed, phaseProgress.total)}|`
+  const statusSuffix = ` [${args.phase}] elapsed=${args.elapsed} completed=${args.completed} failed=${args.failed}`
+  const columns = args.columns && args.columns > 0 ? args.columns : undefined
+
+  if (!columns) {
+    return `${bar} [${args.index}/${args.total}] ${args.name}${statusSuffix}`
+  }
+
+  const prefix = `${bar} `
+  const itemPrefix = `[${args.index}/${args.total}] `
+  const availableNameLength = Math.max(8, columns - prefix.length - itemPrefix.length - statusSuffix.length)
+  const safeName = truncateMiddle(args.name, availableNameLength)
+  const line = `${prefix}${itemPrefix}${safeName}${statusSuffix}`
+  return line.length <= columns ? line : line.slice(0, columns)
+}
+
 function getPhaseProgress(phase: SyncPhase): { completed: number; total: number } {
   switch (phase) {
     case 'queued':
@@ -264,12 +303,16 @@ class ProgressReporter {
   private renderFooter(): void {
     if (!this.interactive || this.verbose || !this.current) return
     const elapsed = formatDuration(Date.now() - this.current.startedAt)
-    const phaseProgress = getPhaseProgress(this.current.phase)
-    const percent = Math.round((phaseProgress.completed / Math.max(phaseProgress.total, 1)) * 100)
-    const footer =
-      `${String(percent).padStart(3, ' ')}%|${renderProgressBar(phaseProgress.completed, phaseProgress.total)}| ` +
-      `[${this.current.index}/${this.current.total}] ${this.current.name} [${this.current.phase}] ` +
-      `elapsed=${elapsed} completed=${this.completed} failed=${this.failed}`
+    const footer = formatFooterLine({
+      columns: process.stdout.columns,
+      completed: this.completed,
+      failed: this.failed,
+      phase: this.current.phase,
+      index: this.current.index,
+      total: this.current.total,
+      name: this.current.name,
+      elapsed,
+    })
     process.stdout.write(`\r\x1b[2K${footer}`)
   }
 

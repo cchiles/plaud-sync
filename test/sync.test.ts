@@ -348,6 +348,53 @@ describe('syncRecordings', () => {
     expect(output).not.toContain('it/s]')
   })
 
+  it('keeps the interactive footer on one line for long recording names', async () => {
+    const recordings = [
+      makeRecording({
+        id: 'rec-1',
+        filename: '04-01 Project Kickoff Meeting: Voicebox Vision, MVP Scope, Compliance, and Pilot Strategy',
+        start_time: 2000,
+      }),
+    ]
+
+    const client: PlaudClient = {
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock((id: string) => Promise.resolve(`https://cdn.example.com/${id}.mp3`)),
+      downloadAudio: mock(() => undefined),
+    } as unknown as PlaudClient
+
+    const transcriber: Transcriber = {
+      transcribe: mock(async (_audioPath, _outputPath, _hfToken, _verbose, _noDiarize, hooks) => {
+        hooks?.onPhaseChange?.('transcribing')
+        await new Promise((resolve) => setTimeout(resolve, 1100))
+      }),
+    } as unknown as Transcriber
+
+    spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(
+      makeStreamingResponse('audio-data'),
+    )) as unknown as typeof fetch)
+
+    const writes: string[] = []
+    const stdoutSpy = spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString())
+      return true
+    }) as typeof process.stdout.write)
+    const columnsSpy = spyOn(process.stdout, 'columns', 'get').mockReturnValue(80)
+
+    await syncRecordings(client, transcriber, tmpDir, { interactive: true })
+
+    columnsSpy.mockRestore()
+    stdoutSpy.mockRestore()
+
+    const footerWrites = writes.filter((chunk) => chunk.includes('\r\x1b[2K'))
+    expect(footerWrites.length).toBeGreaterThan(0)
+    for (const footer of footerWrites) {
+      const cleaned = footer.replace(/\r\x1b\[2K/g, '')
+      const visibleLine = cleaned.split('\n')[0] ?? ''
+      expect(visibleLine.length).toBeLessThanOrEqual(80)
+    }
+  })
+
   it('filters recordings by since date and limit', async () => {
     const recordings = [
       makeRecording({ id: 'rec-1', filename: 'Older', start_time: Date.parse('2026-03-01T10:00:00Z') }),
