@@ -419,7 +419,7 @@ describe('syncRecordings', () => {
 
     const response = makeStreamingResponse(new Uint8Array(32))
     spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(response)) as unknown as typeof fetch)
-    const freeMemSpy = spyOn(os, 'freemem').mockImplementation(() => 3 * 1024 ** 3)
+    const freeMemSpy = spyOn(os, 'freemem').mockImplementation(() => 1 * 1024 ** 3)
     const totalMemSpy = spyOn(os, 'totalmem').mockImplementation(() => 8 * 1024 ** 3)
 
     try {
@@ -429,6 +429,49 @@ describe('syncRecordings', () => {
       expect(summary.failed).toBe(1)
       expect(summary.transcribed).toBe(0)
       expect(summary.stoppedEarly).toBe(true)
+    } finally {
+      freeMemSpy.mockRestore()
+      totalMemSpy.mockRestore()
+    }
+  })
+
+  it('falls back to transcription-only when diarization is unsafe but plain transcription fits', async () => {
+    delete process.env.PLAUD_SYNC_BYPASS_MEMORY_CHECK
+    const recordings = [
+      makeRecording({
+        filesize: 200 * 1024 * 1024,
+        duration: 60 * 60 * 1000,
+      }),
+    ]
+    const client: PlaudClient = {
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock(() => Promise.resolve('https://cdn.example.com/file.mp3')),
+      downloadAudio: mock(() => undefined),
+    } as unknown as PlaudClient
+    const transcriber: Transcriber = {
+      transcribe: mock(() => Promise.resolve(undefined)),
+    } as unknown as Transcriber
+
+    const response = makeStreamingResponse(new Uint8Array(32))
+    spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(response)) as unknown as typeof fetch)
+    const freeMemSpy = spyOn(os, 'freemem').mockImplementation(() => 3.1 * 1024 ** 3)
+    const totalMemSpy = spyOn(os, 'totalmem').mockImplementation(() => 16 * 1024 ** 3)
+
+    try {
+      const summary = await syncRecordings(client, transcriber, tmpDir, { hfToken: 'hf-token' })
+
+      expect(summary.failed).toBe(0)
+      expect(summary.transcribed).toBe(1)
+      expect(summary.stoppedEarly).toBe(false)
+      expect(transcriber.transcribe).toHaveBeenCalledTimes(1)
+      expect(transcriber.transcribe).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        'hf-token',
+        false,
+        true,
+        expect.any(Object),
+      )
     } finally {
       freeMemSpy.mockRestore()
       totalMemSpy.mockRestore()
@@ -451,7 +494,7 @@ describe('syncRecordings', () => {
     } as unknown as Transcriber
 
     spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(makeStreamingResponse('audio-data'))) as unknown as typeof fetch)
-    const freeMemSpy = spyOn(os, 'freemem').mockImplementation(() => 3 * 1024 ** 3)
+    const freeMemSpy = spyOn(os, 'freemem').mockImplementation(() => 1 * 1024 ** 3)
     const totalMemSpy = spyOn(os, 'totalmem').mockImplementation(() => 8 * 1024 ** 3)
 
     try {
@@ -491,5 +534,30 @@ describe('syncRecordings', () => {
     expect(summary.transcribed).toBe(0)
     expect(summary.stoppedEarly).toBe(true)
     expect(transcriber.transcribe).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries without diarization when diarization hits the memory watchdog', async () => {
+    const recordings = [makeRecording()]
+    const client: PlaudClient = {
+      listRecordings: mock(() => Promise.resolve(recordings)),
+      getMp3Url: mock(() => Promise.resolve('https://cdn.example.com/file.mp3')),
+      downloadAudio: mock(() => undefined),
+    } as unknown as PlaudClient
+    const transcriber: Transcriber = {
+      transcribe: mock()
+        .mockImplementationOnce(() => Promise.reject(new Error('diarization stopped to protect system memory: available memory fell to 1.1 GiB')))
+        .mockImplementationOnce(() => Promise.resolve(undefined)),
+    } as unknown as Transcriber
+
+    spyOn(globalThis, 'fetch').mockImplementation((() => Promise.resolve(makeStreamingResponse('audio-data'))) as unknown as typeof fetch)
+
+    const summary = await syncRecordings(client, transcriber, tmpDir, { hfToken: 'hf-token' })
+
+    expect(summary.failed).toBe(0)
+    expect(summary.transcribed).toBe(1)
+    expect(summary.stoppedEarly).toBe(false)
+    expect(transcriber.transcribe).toHaveBeenCalledTimes(2)
+    expect((transcriber.transcribe as any).mock.calls[0][4]).toBe(false)
+    expect((transcriber.transcribe as any).mock.calls[1][4]).toBe(true)
   })
 })

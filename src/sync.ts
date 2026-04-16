@@ -106,15 +106,21 @@ function parseResultLabel(args: {
   downloaded: boolean
   transcribed: boolean
   hadExistingAudio: boolean
+  fellBackToNoDiarize?: boolean
 }): string {
-  if (args.downloaded && args.transcribed) return 'downloaded + transcribed'
-  if (args.transcribed && args.hadExistingAudio) return 'transcribed from existing audio'
-  if (args.downloaded) return 'downloaded'
-  return 'done'
+  const suffix = args.fellBackToNoDiarize ? ' without diarization' : ''
+  if (args.downloaded && args.transcribed) return `downloaded + transcribed${suffix}`
+  if (args.transcribed && args.hadExistingAudio) return `transcribed from existing audio${suffix}`
+  if (args.downloaded) return `downloaded${suffix}`
+  return `done${suffix}`
 }
 
 function isMemorySafetyMessage(message: string): boolean {
   return message.includes('memory safety check') || message.includes('stopped to protect system memory')
+}
+
+function isDiarizationMemorySafetyMessage(message: string): boolean {
+  return message.includes('diarization stopped to protect system memory')
 }
 
 class ProgressReporter {
@@ -500,16 +506,34 @@ export async function syncRecordings(
       const audioBytes = audioPath && fs.existsSync(audioPath)
         ? fs.statSync(audioPath).size
         : rec.filesize
+      let transcriptionNoDiarize = noDiarize
+      let fellBackToNoDiarize = false
       const safetyIssue =
         process.env.PLAUD_SYNC_BYPASS_MEMORY_CHECK === '1'
           ? null
           : assessTranscriptionSafety({
               audioBytes,
               durationMs: rec.duration,
-              diarizationEnabled,
+              diarizationEnabled: !transcriptionNoDiarize && Boolean(hfToken),
             })
 
-      if (safetyIssue) {
+      if (safetyIssue && !transcriptionNoDiarize && hfToken) {
+        const noDiarizeIssue = assessTranscriptionSafety({
+          audioBytes,
+          durationMs: rec.duration,
+          diarizationEnabled: false,
+        })
+
+        if (!noDiarizeIssue) {
+          transcriptionNoDiarize = true
+          fellBackToNoDiarize = true
+          reporter.noteStoppedEarly(
+            `Low memory for speaker diarization on "${rec.filename}". Continuing with transcription only.`,
+          )
+        }
+      }
+
+      if (safetyIssue && !fellBackToNoDiarize) {
         failed += 1
         reporter.phase('failed')
         reporter.result({
@@ -534,7 +558,7 @@ export async function syncRecordings(
       }
 
       try {
-        await transcriber.transcribe(audioPath, transcriptPath, hfToken, verbose, noDiarize, {
+        await transcriber.transcribe(audioPath, transcriptPath, hfToken, verbose, transcriptionNoDiarize, {
           onPhaseChange: (phase) => reporter.phase(phase),
           onTiming: (phaseTiming) => {
             timings.transcriptionMs = phaseTiming.transcriptionMs
@@ -553,6 +577,7 @@ export async function syncRecordings(
             downloaded: downloadedThisRun,
             transcribed: true,
             hadExistingAudio,
+            fellBackToNoDiarize,
           }),
           durationMs: Date.now() - itemStartedAt,
           timings,
@@ -560,6 +585,60 @@ export async function syncRecordings(
         })
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
+
+        if (!fellBackToNoDiarize && !transcriptionNoDiarize && hfToken && isDiarizationMemorySafetyMessage(message)) {
+          reporter.noteStoppedEarly(
+            `Low memory during speaker diarization for "${rec.filename}". Retrying without diarization.`,
+          )
+          try {
+            await transcriber.transcribe(audioPath, transcriptPath, hfToken, verbose, true, {
+              onPhaseChange: (phase) => reporter.phase(phase),
+              onTiming: (phaseTiming) => {
+                timings.transcriptionMs = phaseTiming.transcriptionMs
+                timings.diarizationMs = phaseTiming.diarizationMs
+                timings.writeMs = phaseTiming.writeMs
+              },
+            })
+            db.markTranscribed(rec.id)
+            if (deleteAudioAfterTranscribe && fs.existsSync(audioPath)) {
+              fs.unlinkSync(audioPath)
+            }
+            transcribed += 1
+            reporter.phase('done')
+            reporter.result({
+              label: parseResultLabel({
+                downloaded: downloadedThisRun,
+                transcribed: true,
+                hadExistingAudio,
+                fellBackToNoDiarize: true,
+              }),
+              durationMs: Date.now() - itemStartedAt,
+              timings,
+              countedTranscription: countsTowardTranscription,
+            })
+            continue
+          } catch (retryErr) {
+            const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr)
+            failed += 1
+            reporter.phase('failed')
+            reporter.result({
+              label: `failed transcription: ${retryMessage}`,
+              durationMs: Date.now() - itemStartedAt,
+              failed: true,
+              timings,
+              countedTranscription: countsTowardTranscription,
+            })
+            if (isMemorySafetyMessage(retryMessage)) {
+              stoppedEarly = true
+              reporter.noteStoppedEarly(
+                `Low memory detected while transcribing "${rec.filename}". Stopping cleanly so you can retry later after freeing memory.`,
+              )
+              break
+            }
+            continue
+          }
+        }
+
         failed += 1
         reporter.phase('failed')
         reporter.result({
