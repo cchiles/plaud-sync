@@ -167,7 +167,6 @@ class ProgressReporter {
   private readonly verbose: boolean
   private readonly heartbeatMs: number
   private readonly runStartedAt = Date.now()
-  private footerTimer?: ReturnType<typeof setInterval>
   private heartbeatTimer?: ReturnType<typeof setInterval>
   private current:
     | {
@@ -231,6 +230,8 @@ class ProgressReporter {
     this.current.phase = phase
     if (this.verbose) {
       this.line(`[${this.current.index}/${this.current.total}] ${this.current.name} ${phase}`)
+    } else if (this.interactive) {
+      this.line(this.currentProgressLine())
     }
   }
 
@@ -285,25 +286,17 @@ class ProgressReporter {
   private startLiveUpdates(): void {
     if (!this.interactive || this.verbose) {
       this.heartbeatTimer = setInterval(() => this.heartbeat(), this.heartbeatMs)
-      return
     }
-
-    this.footerTimer = setInterval(() => this.renderFooter(), 1000)
-    this.heartbeatTimer = setInterval(() => this.heartbeat(), this.heartbeatMs)
   }
 
   private stopLiveUpdates(): void {
-    if (this.footerTimer) clearInterval(this.footerTimer)
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
-    if (this.interactive && !this.verbose) {
-      process.stdout.write('\r\x1b[2K')
-    }
   }
 
-  private renderFooter(): void {
-    if (!this.interactive || this.verbose || !this.current) return
+  private currentProgressLine(): string {
+    if (!this.current) return ''
     const elapsed = formatDuration(Date.now() - this.current.startedAt)
-    const footer = formatFooterLine({
+    return formatFooterLine({
       columns: process.stdout.columns,
       completed: this.completed,
       failed: this.failed,
@@ -313,17 +306,10 @@ class ProgressReporter {
       name: this.current.name,
       elapsed,
     })
-    process.stdout.write(`\r\x1b[2K${footer}`)
   }
 
   private line(message: string): void {
-    if (this.interactive && !this.verbose) {
-      process.stdout.write('\r\x1b[2K')
-    }
     process.stdout.write(`${message}\n`)
-    if (this.interactive && !this.verbose && this.current) {
-      this.renderFooter()
-    }
   }
 }
 

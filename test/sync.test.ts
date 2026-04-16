@@ -348,7 +348,7 @@ describe('syncRecordings', () => {
     expect(output).not.toContain('it/s]')
   })
 
-  it('keeps the interactive footer on one line for long recording names', async () => {
+  it('prints phase-based progress lines without carriage-return redraws', async () => {
     const recordings = [
       makeRecording({
         id: 'rec-1',
@@ -386,13 +386,12 @@ describe('syncRecordings', () => {
     columnsSpy.mockRestore()
     stdoutSpy.mockRestore()
 
-    const footerWrites = writes.filter((chunk) => chunk.includes('\r\x1b[2K'))
-    expect(footerWrites.length).toBeGreaterThan(0)
-    for (const footer of footerWrites) {
-      const cleaned = footer.replace(/\r\x1b\[2K/g, '')
-      const visibleLine = cleaned.split('\n')[0] ?? ''
-      expect(visibleLine.length).toBeLessThanOrEqual(80)
-    }
+    const output = writes.join('')
+    expect(output).not.toContain('\r\x1b[2K')
+    const lines = output.split('\n').filter(Boolean)
+    const progressLines = lines.filter((line) => line.includes('%|') && line.includes('[transcribing]'))
+    expect(progressLines.length).toBe(1)
+    expect(progressLines[0]?.length ?? 0).toBeLessThanOrEqual(80)
   })
 
   it('filters recordings by since date and limit', async () => {
